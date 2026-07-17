@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import yfinance as yf
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, date
 from streamlit_gsheets import GSheetsConnection
 
@@ -284,7 +285,6 @@ if menu == "📊 投資總覽儀表板":
             
     df_portfolio['買賣建議'] = df_portfolio.apply(generate_advice, axis=1)
     
-    # 🎯 核心優化處：在 style.format 字典中新增了 '持有數量': '{:.0f}'，完美去除了小數點
     st.dataframe(df_portfolio[['標的名稱', '核心權重', '單位現價', '持有數量', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議']].style.format({
         '核心權重': '{:.1%}', 
         '單位現價': '${:,.2f}', 
@@ -296,7 +296,7 @@ if menu == "📊 投資總覽儀表板":
     
     st.markdown("---")
     
-    # 歷史總資產趨勢追蹤
+    # 🌟 歷史總資產趨勢追蹤 (已升級為雙 Y 軸資產 + 報酬率圖表) 🌟
     st.subheader("📈 歷史總資產趨勢追蹤")
     if not df_history.empty:
         df_history['日期'] = pd.to_datetime(df_history['日期'])
@@ -332,14 +332,55 @@ if menu == "📊 投資總覽儀表板":
                 end_date_input = st.date_input("結束日期：", today)
             df_filtered = df_history[(df_history['日期'] >= pd.to_datetime(start_date_input)) & (df_history['日期'] <= pd.to_datetime(end_date_input))]
         
-        # 末端數值平滑校正機制
+        # 末端數值平滑校正機制 (同步套用至資產與報酬率)
         if len(df_filtered) > 1:
             df_filtered = df_filtered.sort_values(by="日期").copy()
             last_idx = df_filtered.index[-1]
             df_filtered.loc[last_idx, '總資產金額'] = df_filtered.iloc[-2]['總資產金額']
+            df_filtered.loc[last_idx, '每日報酬率'] = df_filtered.iloc[-2]['每日報酬率']
         
         if not df_filtered.empty:
-            fig = px.line(df_filtered, x="日期", y="總資產金額", title=f"資產總額成長曲線 ({time_option})", markers=True)
+            # 1. 建立具有雙 Y 軸架構的基礎圖表
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            
+            # 2. 繪製左邊 Y 軸：總資產金額 (高質感亮藍色實線)
+            fig.add_trace(
+                go.Scatter(
+                    x=df_filtered["日期"], 
+                    y=df_filtered["總資產金額"], 
+                    name="總資產金額 (TWD)",
+                    mode="lines+markers",
+                    line=dict(color="#29B6F6", width=3),
+                    marker=dict(size=5)
+                ),
+                secondary_y=False
+            )
+            
+            # 3. 繪製右邊 Y 軸：累積報酬率 (高對比琥珀黃色虛線)
+            fig.add_trace(
+                go.Scatter(
+                    x=df_filtered["日期"], 
+                    y=df_filtered["每日報酬率"], 
+                    name="累積報酬率 (%)",
+                    mode="lines+markers",
+                    line=dict(color="#FFB300", width=2, dash="dash"),
+                    marker=dict(size=5)
+                ),
+                secondary_y=True
+            )
+            
+            # 4. 配置專業美化佈局與統一懸停動態提示 (Unified Hover)
+            fig.update_layout(
+                title_text=f"資產總額與報酬率綜合成長曲線 ({time_option})",
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(l=50, r=50, t=80, b=50)
+            )
+            
+            # 5. 精準命名軸線並為報酬率右軸套用自動百分比格式化
+            fig.update_yaxes(title_text="<b>總資產金額 (TWD)</b>", secondary_y=False)
+            fig.update_yaxes(title_text="<b>累積報酬率 (%)</b>", tickformat=".1%", secondary_y=True)
+            
             st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
