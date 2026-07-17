@@ -20,23 +20,19 @@ if "connections" not in st.secrets or "gsheets" not in st.secrets["connections"]
     st.stop()
 
 # ==========================================
-# 🏦 自動化：動態貸款餘額扣除計算函式 (歷史起算點版)
+# 🏦 自動化：動態貸款餘額扣除計算函式
 # ==========================================
 def calculate_remaining_loans(current_date):
     """
     依據當前日期，採用獨立歷史起算點，自動計算兩筆貸款的累計已還款期數與剩餘金額
     """
-    # ------------------ 第一筆貸款設定 ------------------
-    # 基準起算點：2024-04-20 (截至 2026-07-17 已還款 27 期)
-    # 推算原始起算金額：694,202 + (27 * 12,797) = 1,039,721
+    # 第一筆貸款設定 (起算點：2024-04-20)
     l1_base = 1039721
     l1_day = 20
     l1_pay = 12797
     l1_base_date = date(2024, 4, 20)
     
-    # ------------------ 第二筆貸款設定 ------------------
-    # 基準起算點：2026-04-10 (截至 2026-07-17 已還款 4 期)
-    # 推算原始起算金額：1,941,174 + (4 * 18,872) = 2,016,662
+    # 第二筆貸款設定 (起算點：2026-04-10)
     l2_base = 2016662
     l2_day = 10
     l2_pay = 18872
@@ -52,7 +48,6 @@ def calculate_remaining_loans(current_date):
         pay_date_l1 = date(current_yr, current_mo, l1_day)
         if l1_base_date <= pay_date_l1 <= current_date:
             l1_payments += 1
-            
         if current_mo == 12:
             current_mo = 1
             current_yr += 1
@@ -68,14 +63,12 @@ def calculate_remaining_loans(current_date):
         pay_date_l2 = date(current_yr, current_mo, l2_day)
         if l2_base_date <= pay_date_l2 <= current_date:
             l2_payments += 1
-            
         if current_mo == 12:
             current_mo = 1
             current_yr += 1
         else:
             current_mo += 1
             
-    # 計算剩餘金額 (確保不為負數)
     l1_rem = max(0, l1_base - (l1_payments * l1_pay))
     l2_rem = max(0, l2_base - (l2_payments * l2_pay))
     
@@ -114,7 +107,7 @@ if not st.session_state["logged_in"]:
                     else:
                         st.error("❌ 帳號或密碼錯誤，請重新確認！")
                 except Exception as e:
-                    st.error(f"❌ 驗證失敗。請確認是否已建立 `user_credentials` 工作表。 錯誤: {e}")
+                    st.error(f"❌ 驗證失敗。 錯誤: {e}")
     st.stop()
 
 # ==========================================
@@ -185,7 +178,6 @@ if menu == "📊 投資總覽儀表板":
     
     st.sidebar.metric("💵 當前美金匯率 (USD/TWD)", f"${usd_twd_rate:.4f}")
     
-    # 核心：執行優化後的動態歷史貸款餘額計算
     today_date = datetime.now().date()
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(today_date)
     total_loan_balance = l1_remain + l2_remain
@@ -219,41 +211,49 @@ if menu == "📊 投資總覽儀表板":
         today_str = datetime.now().strftime("%Y-%m-%d")
         df_history['日期'] = df_history['日期'].astype(str)
         
-        if not df_history.empty:
-            last_amount = float(df_history['總資產金額'].iloc[-1])
+        # 精準計算昨日金額：先排序，過濾掉今天，拿到真正的上一筆金額
+        df_history_temp = df_history.copy()
+        df_history_temp['日期'] = pd.to_datetime(df_history_temp['日期'])
+        df_history_temp = df_history_temp.sort_values(by="日期")
+        df_history_temp['日期'] = df_history_temp['日期'].dt.strftime("%Y-%m-%d")
+        
+        df_yesterday = df_history_temp[df_history_temp['日期'] < today_str]
+        if not df_yesterday.empty:
+            last_amount = float(df_yesterday['總資產金額'].iloc[-1])
             daily_diff = total_market_value - last_amount
         else:
             daily_diff = 0.0
+            
+        # 計算即時每日報酬率
+        daily_roi = round(total_roi, 4)
             
         new_data = {
             "日期": today_str,
             "總資產金額": float(total_market_value),
             "每日增額": float(daily_diff),
-            "每日報酬率": 0.0
+            "每日報酬率": float(daily_roi)
         }
         
         if today_str in df_history['日期'].values:
-            df_history.loc[df_history['日期'] == today_str, ["總資產金額", "每日增額"]] = [float(total_market_value), float(daily_diff)]
+            df_history.loc[df_history['日期'] == today_str, ["總資產金額", "每日增額", "每日報酬率"]] = [float(total_market_value), float(daily_diff), float(daily_roi)]
         else:
             df_history = pd.concat([df_history, pd.DataFrame([new_data])], ignore_index=True)
             
         with st.spinner('正在寫入 Google Sheets...'):
             conn.update(worksheet="daily_asset_history", data=df_history)
-        st.success(f"🎉 成功同步！今日 ({today_str}) 資產已更新。請重新整理網頁！")
+        st.success(f"🎉 成功同步！今日 ({today_str}) 資產、增額與報酬率已完整更新。請重新整理網頁！")
                 
     st.markdown("---")
     
-    # 頂部 Kpi 指標區卡片
+    # KPI 指標卡片
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("當前總市值 (TWD)", f"${total_market_value:,.2f}")
     col2.metric("投資總成本", f"${total_cost:,.2f}")
     col3.metric("累積投資獲利", f"${total_profit:,.2f}", delta=f"{total_roi*100:.2f}% 報酬率")
     
-    # 動態維持率計算公式 (套用歷史基準起算的貸款餘額)
     maintenance_rate = (total_market_value / total_loan_balance) if total_loan_balance > 0 else 0
     col4.metric("質押維持率", f"{maintenance_rate*100:.2f}%", delta="✅ 水位強韌" if maintenance_rate > 1.6 else "⚠️ 需注意風險")
     
-    # 展示自動化貸款餘額明細的 UI 區域 (精準呈現歷史基準進度)
     st.markdown("### 🏦 剩餘貸款與還款明細")
     loan_col1, loan_col2, loan_col3 = st.columns(3)
     with loan_col1:
@@ -324,16 +324,21 @@ if menu == "📊 投資總覽儀表板":
             fig = px.line(df_filtered, x="日期", y="總資產金額", title=f"資產總額成長曲線 ({time_option})", markers=True)
             st.plotly_chart(fig, use_container_width=True)
 
-# 功能二：✍️ 每日資產動態輸入
+# ==========================================
+# 功能二：✍️ 每日資產動態輸入 (含查詢與分頁顯示)
+# ==========================================
 elif menu == "✍️ 每日資產動態輸入":
     st.title("✍️ 每日資產金額輕鬆記")
     try:
         df_history = conn.read(worksheet="daily_asset_history", ttl=0)
+        df_portfolio = conn.read(worksheet="portfolio_config", ttl=0)
     except Exception as e:
         st.error(f"❌ 讀取失敗: {e}")
         st.stop()
         
     df_history = df_history.dropna(subset=["日期"])
+    df_portfolio = df_portfolio.dropna(subset=["標的名稱"])
+    total_cost = df_portfolio['投資成本'].sum()
     
     with st.form("daily_input_form", clear_on_submit=True):
         input_date = st.date_input("選擇紀錄日期：", datetime.now())
@@ -344,37 +349,77 @@ elif menu == "✍️ 每日資產動態輸入":
             date_str = str(input_date)
             df_history['日期'] = df_history['日期'].astype(str)
             
-            if not df_history.empty:
-                df_history_temp = df_history.copy()
-                df_history_temp['日期'] = pd.to_datetime(df_history_temp['日期'])
-                df_history_temp = df_history_temp.sort_values(by="日期")
-                last_amount = float(df_history_temp['總資產金額'].iloc[-1])
+            # 排序並找出該日期之前的最後一筆資料，精準計算增額
+            df_history_temp = df_history.copy()
+            df_history_temp['日期'] = pd.to_datetime(df_history_temp['日期'])
+            df_history_temp = df_history_temp.sort_values(by="日期")
+            df_history_temp['日期'] = df_history_temp['日期'].dt.strftime("%Y-%m-%d")
+            
+            df_yesterday = df_history_temp[df_history_temp['日期'] < date_str]
+            if not df_yesterday.empty:
+                last_amount = float(df_yesterday['總資產金額'].iloc[-1])
                 daily_diff = input_amount - last_amount
             else:
                 daily_diff = 0.0
+                
+            # 計算該日期的每日報酬率
+            daily_roi = round((input_amount - total_cost) / total_cost, 4) if total_cost > 0 else 0.0
                 
             new_data = {
                 "日期": date_str,
                 "總資產金額": float(input_amount),
                 "每日增額": float(daily_diff),
-                "每日報酬率": 0.0
+                "每日報酬率": float(daily_roi)
             }
             
             if date_str in df_history['日期'].values:
-                df_history.loc[df_history['日期'] == date_str, ["總資產金額", "每日增額"]] = [float(input_amount), float(daily_diff)]
+                df_history.loc[df_history['日期'] == date_str, ["總資產金額", "每日增額", "每日報酬率"]] = [float(input_amount), float(daily_diff), float(daily_roi)]
             else:
                 df_history = pd.concat([df_history, pd.DataFrame([new_data])], ignore_index=True)
             
             with st.spinner('正在寫入...'):
                 conn.update(worksheet="daily_asset_history", data=df_history)
-            st.success("🎉 成功同步至雲端試算表！")
+            st.success("🎉 成功同步至雲端試算表！四個欄位已自動更新。")
             
-    st.subheader("📋 最近輸入的資產紀錄歷史")
-    if not df_history.empty:
-        df_history['日期'] = pd.to_datetime(df_history['日期'])
-        st.dataframe(df_history.tail(5).sort_values(by="日期", ascending=False))
+    # 🌟 新增：查詢與分頁功能 (一次顯示 10 筆) 🌟
+    st.markdown("---")
+    st.subheader("📋 歷史資產紀錄查詢與管理")
+    
+    # 1. 搜尋框
+    search_query = st.text_input("🔍 輸入日期關鍵字進行搜尋 (例如：2026-07 或 2026-07-16)：", "")
+    
+    df_display = df_history.copy()
+    
+    # 統一日期格式並降序排列 (最新在前)
+    df_display['日期'] = pd.to_datetime(df_display['日期'])
+    df_display = df_display.sort_values(by="日期", ascending=False)
+    df_display['日期'] = df_display['日期'].dt.strftime("%Y-%m-%d")
+    
+    if search_query:
+        df_display = df_display[df_display['日期'].str.contains(search_query)]
+        
+    # 2. 分頁計算 (每頁 10 筆)
+    rows_per_page = 10
+    total_rows = len(df_display)
+    
+    if total_rows > 0:
+        total_pages = int(np.ceil(total_rows / rows_per_page))
+        
+        col_page_sel, col_page_info = st.columns([1, 4])
+        with col_page_sel:
+            current_page = st.number_input(f"頁碼 (共 {total_pages} 頁)", min_value=1, max_value=total_pages, value=1, step=1)
+        
+        start_idx = (current_page - 1) * rows_per_page
+        end_idx = start_idx + rows_per_page
+        
+        # 美化表格輸出呈現
+        st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
+    else:
+        st.info("ℹ️ 查無符合條件的歷史紀錄。")
 
+# ==========================================
 # 功能三：⚙️ 投資標的持股管理
+# ==========================================
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
     try:
