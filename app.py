@@ -271,7 +271,7 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
-    df_portfolio['目投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
+    df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
     df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
     
     def generate_advice(row):
@@ -326,11 +326,10 @@ if menu == "📊 投資總覽儀表板":
                 end_date_input = st.date_input("結束日期：", today)
             df_filtered = df_history[(df_history['日期'] >= pd.to_datetime(start_date_input)) & (df_history['日期'] <= pd.to_datetime(end_date_input))]
         
-        # 🎯 核心優化：如果最新的一天沒有隔天新的數字可以比較，就維持跟前一天的數字一樣
+        # 末端數值平滑校正機制
         if len(df_filtered) > 1:
             df_filtered = df_filtered.sort_values(by="日期").copy()
             last_idx = df_filtered.index[-1]
-            # 強制將最後一筆的資產金額覆蓋為倒數第二筆（前一天）的數值，使折線完美持平
             df_filtered.loc[last_idx, '總資產金額'] = df_filtered.iloc[-2]['總資產金額']
         
         if not df_filtered.empty:
