@@ -20,6 +20,51 @@ if "connections" not in st.secrets or "gsheets" not in st.secrets["connections"]
     st.stop()
 
 # ==========================================
+# 🔒 系統安全登入驗證機制 (Session State)
+# ==========================================
+# 初始化登入狀態
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+
+# 如果尚未登入，顯示登入畫面並阻擋後續程式執行
+if not st.session_state["logged_in"]:
+    st.markdown("<h2 style='text-align: center;'>🔒 智慧投資紀錄簿 - 系統登入</h2>", unsafe_allow_html=True)
+    st.write("")
+    
+    # 建立登入表單置中
+    col_space1, col_login, col_space2 = st.columns([1, 2, 1])
+    
+    with col_login:
+        with st.form("login_form", clear_on_submit=False):
+            username_input = st.text_input("請輸入管理員帳號：")
+            password_input = st.text_input("請輸入密碼：", type="password")
+            submit_login = st.form_submit_button("🚀 安全登入", use_container_width=True)
+            
+            if submit_login:
+                try:
+                    # 即時向 Google Sheets 讀取 credentials
+                    df_creds = conn.read(worksheet="user_credentials", ttl=0)
+                    df_creds = df_creds.dropna(subset=["帳號", "密碼"])
+                    
+                    # 比對輸入的帳號密碼是否存在於資料表中
+                    match = df_creds[
+                        (df_creds["帳號"].astype(str) == username_input) & 
+                        (df_creds["密碼"].astype(str) == password_input)
+                    ]
+                    
+                    if not match.empty:
+                        st.session_state["logged_in"] = True
+                        st.session_state["username"] = username_input
+                        st.success("🎉 登入成功！正在跳轉...")
+                        st.rerun()  # 重新整理網頁以載入儀表板
+                    else:
+                        st.error("❌ 帳號或密碼錯誤，請重新確認！")
+                except Exception as e:
+                    st.error(f"❌ 驗證失敗。請確認 Google 試算表中是否已建立 `user_credentials` 工作表。 錯誤: {e}")
+                    
+    st.stop()  # 強制中斷，不讓未登入者看到下方的儀表板內容
+
+# ==========================================
 # 2. 自動化功能：線上即時股價與匯率抓取
 # ==========================================
 @st.cache_data(ttl=3600)
@@ -39,7 +84,6 @@ def fetch_realtime_prices(tickers):
             prices[ticker] = 0.0
     return prices
 
-# 新增：自動抓取美金兌台幣匯率
 @st.cache_data(ttl=3600)
 def get_usd_twd_rate():
     try:
@@ -48,15 +92,24 @@ def get_usd_twd_rate():
         if not todays_data.empty:
             return round(todays_data['Close'].iloc[-1], 4)
         else:
-            return 32.5  # 抓取失敗時之預設防錯匯率
+            return 32.5
     except Exception:
         return 32.5
 
 # ==========================================
-# 3. 側邊導覽列
+# 3. 側邊導覽列與登出按鈕
 # ==========================================
 st.sidebar.title("🧭 投資導覽控制台")
+st.sidebar.write(f"👤 目前使用者：`{st.session_state['username']}`")
+
 menu = st.sidebar.radio("請選擇操作功能：", ["📊 投資總覽儀表板", "✍️ 每日資產動態輸入", "⚙️ 投資標的持股管理"])
+
+# 建立安全登出按鈕
+st.sidebar.markdown("---")
+if st.sidebar.button("🔓 安全登出系統", use_container_width=True):
+    st.session_state["logged_in"] = False
+    st.session_state["username"] = None
+    st.rerun()
 
 # ==========================================
 # 功能一：📊 投資總覽儀表板
@@ -78,23 +131,17 @@ if menu == "📊 投資總覽儀表板":
         current_prices = fetch_realtime_prices(df_portfolio['Yahoo代號'].tolist())
         usd_twd_rate = get_usd_twd_rate()
     
-    # 在側邊欄顯示當前匯率資訊
-    st.sidebar.markdown("---")
     st.sidebar.metric("💵 當前美金匯率 (USD/TWD)", f"${usd_twd_rate:.4f}")
     
     df_portfolio['單位現價'] = df_portfolio['Yahoo代號'].map(current_prices)
     
-    # 核心修正：根據標的之代號後綴，判定是否需要進行美金台幣匯率轉換
     def calculate_twd_market_value(row):
         ticker = str(row['Yahoo代號'])
         price = float(row['單位現價'])
         qty = float(row['持有數量'])
-        
-        # 若為台股 (以 .TW 結尾) 或現金，不需轉換
         if ticker.endswith('.TW') or ticker == '現金':
             return price * qty
         else:
-            # 美股標的 (如 QQQM) 計算公式：美金現價 * 持有數量 * 即時匯率
             return price * qty * usd_twd_rate
 
     df_portfolio['當前市值'] = df_portfolio.apply(calculate_twd_market_value, axis=1)
@@ -104,7 +151,6 @@ if menu == "📊 投資總覽儀表板":
     total_profit = total_market_value - total_cost
     total_roi = (total_profit / total_cost) if total_cost > 0 else 0
 
-    # ⚡️ 手動立即更新按鈕
     st.markdown("### ⚡️ 快速同步控制區")
     col_btn, col_info = st.columns([1, 3])
     with col_btn:
@@ -171,7 +217,7 @@ if menu == "📊 投資總覽儀表板":
     
     st.markdown("---")
     
-    st.subheader("📈 歷史總資產趨蹤")
+    st.subheader("📈 歷史總資產趨勢追蹤")
     if not df_history.empty:
         df_history['日期'] = pd.to_datetime(df_history['日期'])
         df_history = df_history.sort_values(by="日期")
@@ -210,7 +256,7 @@ if menu == "📊 投資總覽儀表板":
             fig = px.line(df_filtered, x="日期", y="總資產金額", title=f"資產總額成長曲線 ({time_option})", markers=True)
             st.plotly_chart(fig, use_container_width=True)
 
-# 功能二：✍️ 每日資產動態輸入 (其餘程式碼保持不變)
+# 功能二：✍️ 每日資產動態輸入
 elif menu == "✍️ 每日資產動態輸入":
     st.title("✍️ 每日資產金額輕鬆記")
     try:
@@ -228,7 +274,7 @@ elif menu == "✍️ 每日資產動態輸入":
         
         if submit_button:
             date_str = str(input_date)
-            df_history['日期'] = df_history['日期'].astype(str)
+            df_history['開頭'] = df_history['日期'].astype(str)
             
             if not df_history.empty:
                 df_history_temp = df_history.copy()
@@ -260,7 +306,7 @@ elif menu == "✍️ 每日資產動態輸入":
         df_history['日期'] = pd.to_datetime(df_history['日期'])
         st.dataframe(df_history.tail(5).sort_values(by="日期", ascending=False))
 
-# 功能三：⚙️ 投資標的持股管理 (其餘程式碼保持不變)
+# 功能三：⚙️ 投資標的持股管理
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
     try:
