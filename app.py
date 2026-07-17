@@ -296,7 +296,7 @@ if menu == "📊 投資總覽儀表板":
     
     st.markdown("---")
     
-    # 🌟 歷史總資產趨勢追蹤 (已升級為雙 Y 軸資產 + 報酬率圖表) 🌟
+    # 歷史總資產趨勢追蹤 (已將總資產升級為直條圖模式)
     st.subheader("📈 歷史總資產趨勢追蹤")
     if not df_history.empty:
         df_history['日期'] = pd.to_datetime(df_history['日期'])
@@ -332,7 +332,7 @@ if menu == "📊 投資總覽儀表板":
                 end_date_input = st.date_input("結束日期：", today)
             df_filtered = df_history[(df_history['日期'] >= pd.to_datetime(start_date_input)) & (df_history['日期'] <= pd.to_datetime(end_date_input))]
         
-        # 末端數值平滑校正機制 (同步套用至資產與報酬率)
+        # 末端數值平滑校正機制
         if len(df_filtered) > 1:
             df_filtered = df_filtered.sort_values(by="日期").copy()
             last_idx = df_filtered.index[-1]
@@ -340,23 +340,21 @@ if menu == "📊 投資總覽儀表板":
             df_filtered.loc[last_idx, '每日報酬率'] = df_filtered.iloc[-2]['每日報酬率']
         
         if not df_filtered.empty:
-            # 1. 建立具有雙 Y 軸架構的基礎圖表
+            # 建立具有雙 Y 軸架構的基礎副圖表
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             
-            # 2. 繪製左邊 Y 軸：總資產金額 (高質感亮藍色實線)
+            # 🎯 核心優化處：將總資產金額改為 go.Bar 直條圖，並設定半透明度增加層次感
             fig.add_trace(
-                go.Scatter(
+                go.Bar(
                     x=df_filtered["日期"], 
                     y=df_filtered["總資產金額"], 
                     name="總資產金額 (TWD)",
-                    mode="lines+markers",
-                    line=dict(color="#29B6F6", width=3),
-                    marker=dict(size=5)
+                    marker=dict(color="#29B6F6", opacity=0.8)
                 ),
                 secondary_y=False
             )
             
-            # 3. 繪製右邊 Y 軸：累積報酬率 (高對比琥珀黃色虛線)
+            # 累積報酬率維持高對比黃色折線在上方
             fig.add_trace(
                 go.Scatter(
                     x=df_filtered["日期"], 
@@ -369,7 +367,7 @@ if menu == "📊 投資總覽儀表板":
                 secondary_y=True
             )
             
-            # 4. 配置專業美化佈局與統一懸停動態提示 (Unified Hover)
+            # 配置排版與懸停動態提示
             fig.update_layout(
                 title_text=f"資產總額與報酬率綜合成長曲線 ({time_option})",
                 hovermode="x unified",
@@ -377,7 +375,7 @@ if menu == "📊 投資總覽儀表板":
                 margin=dict(l=50, r=50, t=80, b=50)
             )
             
-            # 5. 精準命名軸線並為報酬率右軸套用自動百分比格式化
+            # 精準命名軸線標籤
             fig.update_yaxes(title_text="<b>總資產金額 (TWD)</b>", secondary_y=False)
             fig.update_yaxes(title_text="<b>累積報酬率 (%)</b>", tickformat=".1%", secondary_y=True)
             
