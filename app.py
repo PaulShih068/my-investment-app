@@ -112,21 +112,27 @@ if not st.session_state["logged_in"]:
     st.stop()
 
 # ==========================================
-# 2. 自動化功能：線上即時股價與匯率抓取
+# 2. 自動化功能：線上即時股價與匯率抓取 (🎯已加入強韌多級備援機制)
 # ==========================================
 @st.cache_data(ttl=3600)
 def fetch_realtime_prices(tickers):
     prices = {}
     for ticker in tickers:
-        if not ticker:
+        if not ticker or ticker == '現金':
             continue
         try:
-            stock = yf.Ticker(ticker)
+            stock = yf.Ticker(str(ticker).strip())
+            # 第一級嘗試：抓取今日即時數據
             todays_data = stock.history(period='1d')
             if not todays_data.empty:
                 prices[ticker] = round(todays_data['Close'].iloc[-1], 2)
             else:
-                prices[ticker] = 0.0
+                # 第二級備援：今日無數據時 (如週末或連假)，自動擴大抓取近 5 天歷史收盤價
+                fallback_data = stock.history(period='5d')
+                if not fallback_data.empty:
+                    prices[ticker] = round(fallback_data['Close'].iloc[-1], 2)
+                else:
+                    prices[ticker] = 0.0
         except Exception:
             prices[ticker] = 0.0
     return prices
@@ -139,6 +145,9 @@ def get_usd_twd_rate():
         if not todays_data.empty:
             return round(todays_data['Close'].iloc[-1], 4)
         else:
+            fallback_data = stock.history(period='5d')
+            if not fallback_data.empty:
+                return round(fallback_data['Close'].iloc[-1], 4)
             return 32.5
     except Exception:
         return 32.5
@@ -183,10 +192,12 @@ if menu == "📊 投資總覽儀表板":
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(today_date)
     total_loan_balance = l1_remain + l2_remain
     
-    df_portfolio['單位現價'] = df_portfolio['Yahoo代號'].map(current_prices)
+    # 🎯 核心優化處：使用 fillna(0.0) 確保查無代號時型態正確，並強制鎖定現金匯率現價為 1.0
+    df_portfolio['單位現價'] = df_portfolio['Yahoo代號'].map(current_prices).fillna(0.0)
+    df_portfolio.loc[df_portfolio['Yahoo代號'] == '現金', '單位現價'] = 1.0
     
     def calculate_twd_market_value(row):
-        ticker = str(row['Yahoo代號'])
+        ticker = str(row['Yahoo代號']).strip()
         price = float(row['單位現價'])
         qty = float(row['持有數量'])
         if ticker.endswith('.TW') or ticker == '現金':
@@ -296,7 +307,7 @@ if menu == "📊 投資總覽儀表板":
     
     st.markdown("---")
     
-    # 歷史總資產趨勢追蹤 (已將總資產升級為直條圖模式)
+    # 歷史總資產趨勢追蹤
     st.subheader("📈 歷史總資產趨勢追蹤")
     if not df_history.empty:
         df_history['日期'] = pd.to_datetime(df_history['日期'])
@@ -340,10 +351,8 @@ if menu == "📊 投資總覽儀表板":
             df_filtered.loc[last_idx, '每日報酬率'] = df_filtered.iloc[-2]['每日報酬率']
         
         if not df_filtered.empty:
-            # 建立具有雙 Y 軸架構的基礎副圖表
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             
-            # 🎯 核心優化處：將總資產金額改為 go.Bar 直條圖，並設定半透明度增加層次感
             fig.add_trace(
                 go.Bar(
                     x=df_filtered["日期"], 
@@ -354,7 +363,6 @@ if menu == "📊 投資總覽儀表板":
                 secondary_y=False
             )
             
-            # 累積報酬率維持高對比黃色折線在上方
             fig.add_trace(
                 go.Scatter(
                     x=df_filtered["日期"], 
@@ -367,7 +375,6 @@ if menu == "📊 投資總覽儀表板":
                 secondary_y=True
             )
             
-            # 配置排版與懸停動態提示
             fig.update_layout(
                 title_text=f"資產總額與報酬率綜合成長曲線 ({time_option})",
                 hovermode="x unified",
@@ -375,7 +382,6 @@ if menu == "📊 投資總覽儀表板":
                 margin=dict(l=50, r=50, t=80, b=50)
             )
             
-            # 精準命名軸線標籤
             fig.update_yaxes(title_text="<b>總資產金額 (TWD)</b>", secondary_y=False)
             fig.update_yaxes(title_text="<b>累積報酬率 (%)</b>", tickformat=".1%", secondary_y=True)
             
