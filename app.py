@@ -112,43 +112,54 @@ if not st.session_state["logged_in"]:
     st.stop()
 
 # ==========================================
-# 2. 自動化功能：線上即時股價與匯率抓取 (🎯已加入強韌多級備援機制)
+# 2. 自動化功能：線上即時股價與匯率抓取 (🎯已升級為單次全批次下載機制，防 IP 阻擋)
 # ==========================================
 @st.cache_data(ttl=3600)
 def fetch_realtime_prices(tickers):
     prices = {}
-    for ticker in tickers:
-        if not ticker or ticker == '現金':
-            continue
-        try:
-            stock = yf.Ticker(str(ticker).strip())
-            # 第一級嘗試：抓取今日即時數據
-            todays_data = stock.history(period='1d')
-            if not todays_data.empty:
-                prices[ticker] = round(todays_data['Close'].iloc[-1], 2)
-            else:
-                # 第二級備援：今日無數據時 (如週末或連假)，自動擴大抓取近 5 天歷史收盤價
-                fallback_data = stock.history(period='5d')
-                if not fallback_data.empty:
-                    prices[ticker] = round(fallback_data['Close'].iloc[-1], 2)
-                else:
+    # 清洗代號，過濾掉空值與現金項
+    valid_tickers = list(set([str(t).strip() for t in tickers if t and str(t).strip() != '現金']))
+    if not valid_tickers:
+        return prices
+        
+    try:
+        # 僅發送 1 次請求下載全部標的歷史資料，極大化降低 Streamlit Cloud 被封鎖機率
+        data = yf.download(valid_tickers, period='5d', group_by='ticker', progress=False)
+        if not data.empty:
+            for ticker in valid_tickers:
+                try:
+                    # 依據標的數量自動拆解單層或多層欄位結構
+                    df_ticker = data if len(valid_tickers) == 1 else data[ticker]
+                    if 'Close' in df_ticker.columns:
+                        closes = df_ticker['Close'].dropna()
+                        if not closes.empty:
+                            prices[ticker] = round(float(closes.iloc[-1]), 2)
+                        else:
+                            prices[ticker] = 0.0
+                    else:
+                        prices[ticker] = 0.0
+                except:
                     prices[ticker] = 0.0
-        except Exception:
-            prices[ticker] = 0.0
+    except Exception:
+        # 最終防禦：若批次下載也失敗，改採極慢速單筆防禦性取值
+        for ticker in valid_tickers:
+            try:
+                stock = yf.Ticker(ticker)
+                df = stock.history(period='5d')
+                prices[ticker] = round(df['Close'].iloc[-1], 2) if not df.empty else 0.0
+            except:
+                prices[ticker] = 0.0
     return prices
 
 @st.cache_data(ttl=3600)
 def get_usd_twd_rate():
     try:
-        stock = yf.Ticker("USDTWD=X")
-        todays_data = stock.history(period='1d')
-        if not todays_data.empty:
-            return round(todays_data['Close'].iloc[-1], 4)
-        else:
-            fallback_data = stock.history(period='5d')
-            if not fallback_data.empty:
-                return round(fallback_data['Close'].iloc[-1], 4)
-            return 32.5
+        data = yf.download("USDTWD=X", period='5d', progress=False)
+        if not data.empty and 'Close' in data.columns:
+            closes = data['Close'].dropna()
+            if not closes.empty:
+                return round(float(closes.iloc[-1]), 4)
+        return 32.5
     except Exception:
         return 32.5
 
@@ -182,7 +193,7 @@ if menu == "📊 投資總覽儀表板":
     df_history = df_history.dropna(subset=["日期"])
     df_portfolio = df_portfolio.dropna(subset=["標的名稱"])
     
-    with st.spinner('正在從 Yahoo Finance 獲取最新即時報價與匯率...'):
+    with st.spinner('正在透過全批次通道獲取 Yahoo Finance 最新股價與匯率...'):
         current_prices = fetch_realtime_prices(df_portfolio['Yahoo代號'].tolist())
         usd_twd_rate = get_usd_twd_rate()
     
@@ -192,7 +203,7 @@ if menu == "📊 投資總覽儀表板":
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(today_date)
     total_loan_balance = l1_remain + l2_remain
     
-    # 🎯 核心優化處：使用 fillna(0.0) 確保查無代號時型態正確，並強制鎖定現金匯率現價為 1.0
+    # 計算各標的價值
     df_portfolio['單位現價'] = df_portfolio['Yahoo代號'].map(current_prices).fillna(0.0)
     df_portfolio.loc[df_portfolio['Yahoo代號'] == '現金', '單位現價'] = 1.0
     
@@ -211,6 +222,16 @@ if menu == "📊 投資總覽儀表板":
     total_cost = df_portfolio['投資成本'].sum()
     total_profit = total_market_value - total_cost
     total_roi = (total_profit / total_cost) if total_cost > 0 else 0
+
+    # 🎯 核心優化處：動態安全除錯面板 (僅在市值異常歸零時自動觸發，精準通靈)
+    if total_market_value == 0:
+        st.error("⚠️ 偵測到當前總市值異常計算為 $0.00！請展開下方除錯面板確認核心原因：")
+        with st.expander("🔍 智慧投資紀錄簿 - 系統即時除錯面板", expanded=True):
+            st.write("### 1. 檢查從 Google Sheets 載入的持股配置表 (`portfolio_config`)")
+            st.dataframe(df_portfolio)
+            st.write("### 2. 檢查 Yahoo Finance 當前下載到的即時報價字典 (`current_prices`)")
+            st.write(current_prices)
+            st.info("💡 提示：如果上方配置表欄位正確但報價清單內全部都是 0.0，代表 Yahoo 正在對伺服器進行短暫 IP 風控阻擋，請稍候 3 分鐘再點擊下方按鈕嘗試重新整理。")
 
     st.markdown("### ⚡️ 快速同步控制區")
     col_btn, col_info = st.columns([1, 3])
