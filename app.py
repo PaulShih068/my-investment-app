@@ -6,13 +6,22 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from streamlit_gsheets import GSheetsConnection
 
+# ==========================================
 # 1. 系統設定與網頁配置
+# ==========================================
 st.set_page_config(page_title="個人智慧投資紀錄簿", layout="wide", initial_sidebar_state="expanded")
 
 # 建立 Google Sheets 連結物件
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 2. 線上即時股價抓取
+# 安全檢查：確保 Secrets 設定正確
+if "connections" not in st.secrets or "gsheets" not in st.secrets["connections"] or "spreadsheet" not in st.secrets["connections"]["gsheets"]:
+    st.error("⚠️ 偵測到雲端設定錯誤！請檢查 Streamlit Cloud 控制台中的 Secrets 設定。")
+    st.stop()
+
+# ==========================================
+# 2. 自動化功能：線上即時股價與匯率抓取
+# ==========================================
 @st.cache_data(ttl=3600)
 def fetch_realtime_prices(tickers):
     prices = {}
@@ -30,11 +39,28 @@ def fetch_realtime_prices(tickers):
             prices[ticker] = 0.0
     return prices
 
+# 新增：自動抓取美金兌台幣匯率
+@st.cache_data(ttl=3600)
+def get_usd_twd_rate():
+    try:
+        stock = yf.Ticker("USDTWD=X")
+        todays_data = stock.history(period='1d')
+        if not todays_data.empty:
+            return round(todays_data['Close'].iloc[-1], 4)
+        else:
+            return 32.5  # 抓取失敗時之預設防錯匯率
+    except Exception:
+        return 32.5
+
+# ==========================================
 # 3. 側邊導覽列
+# ==========================================
 st.sidebar.title("🧭 投資導覽控制台")
 menu = st.sidebar.radio("請選擇操作功能：", ["📊 投資總覽儀表板", "✍️ 每日資產動態輸入", "⚙️ 投資標的持股管理"])
 
+# ==========================================
 # 功能一：📊 投資總覽儀表板
+# ==========================================
 if menu == "📊 投資總覽儀表板":
     st.title("📊 個人即時投資動態儀表板 (Google Sheets 同步)")
     
@@ -42,17 +68,36 @@ if menu == "📊 投資總覽儀表板":
         df_history = conn.read(worksheet="daily_asset_history", ttl=0)
         df_portfolio = conn.read(worksheet="portfolio_config", ttl=0)
     except Exception as e:
-        st.error(f"❌ 無法讀取 Google Sheets！請確認 secrets 設定！ 錯誤訊息: {e}")
+        st.error(f"❌ 無法讀取 Google Sheets！ 錯誤訊息: {e}")
         st.stop()
         
     df_history = df_history.dropna(subset=["日期"])
     df_portfolio = df_portfolio.dropna(subset=["標的名稱"])
     
-    with st.spinner('正在獲取最新即時報價...'):
+    with st.spinner('正在從 Yahoo Finance 獲取最新即時報價與匯率...'):
         current_prices = fetch_realtime_prices(df_portfolio['Yahoo代號'].tolist())
+        usd_twd_rate = get_usd_twd_rate()
+    
+    # 在側邊欄顯示當前匯率資訊
+    st.sidebar.markdown("---")
+    st.sidebar.metric("💵 當前美金匯率 (USD/TWD)", f"${usd_twd_rate:.4f}")
     
     df_portfolio['單位現價'] = df_portfolio['Yahoo代號'].map(current_prices)
-    df_portfolio['當前市值'] = df_portfolio['單位現價'] * df_portfolio['持有數量']
+    
+    # 核心修正：根據標的之代號後綴，判定是否需要進行美金台幣匯率轉換
+    def calculate_twd_market_value(row):
+        ticker = str(row['Yahoo代號'])
+        price = float(row['單位現價'])
+        qty = float(row['持有數量'])
+        
+        # 若為台股 (以 .TW 結尾) 或現金，不需轉換
+        if ticker.endswith('.TW') or ticker == '現金':
+            return price * qty
+        else:
+            # 美股標的 (如 QQQM) 計算公式：美金現價 * 持有數量 * 即時匯率
+            return price * qty * usd_twd_rate
+
+    df_portfolio['當前市值'] = df_portfolio.apply(calculate_twd_market_value, axis=1)
     
     total_market_value = df_portfolio['當前市值'].sum()
     total_cost = df_portfolio['投資成本'].sum()
@@ -126,8 +171,7 @@ if menu == "📊 投資總覽儀表板":
     
     st.markdown("---")
     
-    # 歷史總資產趨勢追蹤 (時間篩選優化)
-    st.subheader("📈 歷史總資產趨勢追蹤")
+    st.subheader("📈 歷史總資產趨蹤")
     if not df_history.empty:
         df_history['日期'] = pd.to_datetime(df_history['日期'])
         df_history = df_history.sort_values(by="日期")
@@ -135,7 +179,8 @@ if menu == "📊 投資總覽儀表板":
         time_option = st.radio(
             "選擇顯示的時間區間：",
             ["近 7 天", "近 30 天", "近 180 天", "今年以來 (YTD)", "全部顯示", "自訂日期範圍"],
-            horizontal=True
+            horizontal=True,
+            key="dashboard_time_range"
         )
         
         today = datetime.now()
@@ -165,7 +210,7 @@ if menu == "📊 投資總覽儀表板":
             fig = px.line(df_filtered, x="日期", y="總資產金額", title=f"資產總額成長曲線 ({time_option})", markers=True)
             st.plotly_chart(fig, use_container_width=True)
 
-# 功能二：✍️ 每日資產動態輸入
+# 功能二：✍️ 每日資產動態輸入 (其餘程式碼保持不變)
 elif menu == "✍️ 每日資產動態輸入":
     st.title("✍️ 每日資產金額輕鬆記")
     try:
@@ -215,7 +260,7 @@ elif menu == "✍️ 每日資產動態輸入":
         df_history['日期'] = pd.to_datetime(df_history['日期'])
         st.dataframe(df_history.tail(5).sort_values(by="日期", ascending=False))
 
-# 功能三：⚙️ 投資標的持股管理
+# 功能三：⚙️ 投資標的持股管理 (其餘程式碼保持不變)
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
     try:
