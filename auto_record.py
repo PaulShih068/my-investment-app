@@ -74,7 +74,7 @@ df_portfolio['當前市值'] = df_portfolio.apply(calculate_twd_market_value, ax
 total_market_value = float(df_portfolio['當前市值'].sum())
 
 # ==========================================
-# 4. 寫入或更新今日紀錄 (4欄位自動化計算)
+# 4. 寫入或更新今日紀錄 (4欄位自動化計算 + 🎯四捨五入整數化)
 # ==========================================
 hist_data = hist_ws.get_all_records()
 df_history = pd.DataFrame(hist_data)
@@ -98,6 +98,10 @@ if not df_history.empty:
 else:
     daily_diff = 0.0
 
+# 🎯 優化：自動記帳寫入前全面四捨五入並強轉整數 (Integer)
+total_market_value_rounded = int(round(total_market_value))
+daily_diff_rounded = int(round(daily_diff))
+
 # 自動算出當日報酬率
 daily_roi = round((total_market_value - total_cost) / total_cost, 4) if total_cost > 0 else 0.0
 
@@ -105,11 +109,11 @@ daily_roi = round((total_market_value - total_cost) / total_cost, 4) if total_co
 if not df_history.empty and today_str in df_history['日期'].values:
     # 找到那一行並更新 3 個欄位 (gspread 索引從 1 開始，且有標題列，故索引 + 2)
     row_idx = df_history[df_history['日期'] == today_str].index[0] + 2
-    hist_ws.update_cell(row_idx, 2, total_market_value)
-    hist_ws.update_cell(row_idx, 3, daily_diff)
+    hist_ws.update_cell(row_idx, 2, total_market_value_rounded)
+    hist_ws.update_cell(row_idx, 3, daily_diff_rounded)
     hist_ws.update_cell(row_idx, 4, daily_roi)
-    print(f"🔄 [自動記帳] 已更新今日 ({today_str}) 4 欄位資料。市值: ${total_market_value:,.2f} | 增額: ${daily_diff:,.2f} | 報酬率: {daily_roi:.2%}")
+    print(f"🔄 [自動記帳] 已更新今日 ({today_str}) 4 欄位資料。市值: {total_market_value_rounded} | 增額: {daily_diff_rounded} | 報酬率: {daily_roi:.2%}")
 else:
     # 新增一行
-    hist_ws.append_row([today_str, total_market_value, daily_diff, daily_roi])
-    print(f"🚀 [自動記帳] 已新增今日 ({today_str}) 4 欄位資料。市值: ${total_market_value:,.2f} | 增額: ${daily_diff:,.2f} | 報酬率: {daily_roi:.2%}")
+    hist_ws.append_row([today_str, total_market_value_rounded, daily_diff_rounded, daily_roi])
+    print(f"🚀 [自動記帳] 已新增今日 ({today_str}) 4 欄位資料。市值: {total_market_value_rounded} | 增額: {daily_diff_rounded} | 報酬率: {daily_roi:.2%}")

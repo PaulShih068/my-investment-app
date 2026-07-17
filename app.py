@@ -211,7 +211,7 @@ if menu == "📊 投資總覽儀表板":
         today_str = datetime.now().strftime("%Y-%m-%d")
         df_history['日期'] = df_history['日期'].astype(str)
         
-        # 精準計算昨日金額：先排序，過濾掉今天，拿到真正的上一筆金額
+        # 精準計算昨日金額
         df_history_temp = df_history.copy()
         df_history_temp['日期'] = pd.to_datetime(df_history_temp['日期'])
         df_history_temp = df_history_temp.sort_values(by="日期")
@@ -224,24 +224,31 @@ if menu == "📊 投資總覽儀表板":
         else:
             daily_diff = 0.0
             
-        # 計算即時每日報酬率
         daily_roi = round(total_roi, 4)
+            
+        # 🎯 優化：寫入最新一筆資料時進行四捨五入整數化 (沒有小數點)
+        total_market_value_rounded = int(round(total_market_value))
+        daily_diff_rounded = int(round(daily_diff))
             
         new_data = {
             "日期": today_str,
-            "總資產金額": float(total_market_value),
-            "每日增額": float(daily_diff),
+            "總資產金額": total_market_value_rounded,
+            "每日增額": daily_diff_rounded,
             "每日報酬率": float(daily_roi)
         }
         
         if today_str in df_history['日期'].values:
-            df_history.loc[df_history['日期'] == today_str, ["總資產金額", "每日增額", "每日報酬率"]] = [float(total_market_value), float(daily_diff), float(daily_roi)]
+            df_history.loc[df_history['日期'] == today_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
+                total_market_value_rounded, 
+                daily_diff_rounded, 
+                float(daily_roi)
+            ]
         else:
             df_history = pd.concat([df_history, pd.DataFrame([new_data])], ignore_index=True)
             
         with st.spinner('正在寫入 Google Sheets...'):
             conn.update(worksheet="daily_asset_history", data=df_history)
-        st.success(f"🎉 成功同步！今日 ({today_str}) 資產、增額與報酬率已完整更新。請重新整理網頁！")
+        st.success(f"🎉 成功同步！今日 ({today_str}) 資產已更新為整數型態。請重新整理網頁！")
                 
     st.markdown("---")
     
@@ -325,7 +332,7 @@ if menu == "📊 投資總覽儀表板":
             st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# 功能二：✍️ 每日資產動態輸入 (含查詢與分頁顯示)
+# 功能二：✍️ 每日資產動態輸入
 # ==========================================
 elif menu == "✍️ 每日資產動態輸入":
     st.title("✍️ 每日資產金額輕鬆記")
@@ -349,7 +356,7 @@ elif menu == "✍️ 每日資產動態輸入":
             date_str = str(input_date)
             df_history['日期'] = df_history['日期'].astype(str)
             
-            # 排序並找出該日期之前的最後一筆資料，精準計算增額
+            # 排序並過濾
             df_history_temp = df_history.copy()
             df_history_temp['日期'] = pd.to_datetime(df_history_temp['日期'])
             df_history_temp = df_history_temp.sort_values(by="日期")
@@ -362,43 +369,81 @@ elif menu == "✍️ 每日資產動態輸入":
             else:
                 daily_diff = 0.0
                 
-            # 計算該日期的每日報酬率
             daily_roi = round((input_amount - total_cost) / total_cost, 4) if total_cost > 0 else 0.0
+                
+            # 🎯 優化：手動表單寫入最新一筆資料時進行四捨五入整數化
+            input_amount_rounded = int(round(input_amount))
+            daily_diff_rounded = int(round(daily_diff))
                 
             new_data = {
                 "日期": date_str,
-                "總資產金額": float(input_amount),
-                "每日增額": float(daily_diff),
+                "總資產金額": input_amount_rounded,
+                "每日增額": daily_diff_rounded,
                 "每日報酬率": float(daily_roi)
             }
             
             if date_str in df_history['日期'].values:
-                df_history.loc[df_history['日期'] == date_str, ["總資產金額", "每日增額", "每日報酬率"]] = [float(input_amount), float(daily_diff), float(daily_roi)]
+                df_history.loc[df_history['日期'] == date_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
+                    input_amount_rounded, 
+                    daily_diff_rounded, 
+                    float(daily_roi)
+                ]
             else:
                 df_history = pd.concat([df_history, pd.DataFrame([new_data])], ignore_index=True)
             
             with st.spinner('正在寫入...'):
                 conn.update(worksheet="daily_asset_history", data=df_history)
-            st.success("🎉 成功同步至雲端試算表！四個欄位已自動更新。")
+            st.success("🎉 成功同步至雲端試算表！數值已自動四捨五入為整數。")
             
-    # 🌟 新增：查詢與分頁功能 (一次顯示 10 筆) 🌟
+    # 🌟 優化優點：歷史資產紀錄查詢與管理 🌟
     st.markdown("---")
     st.subheader("📋 歷史資產紀錄查詢與管理")
     
-    # 1. 搜尋框
-    search_query = st.text_input("🔍 輸入日期關鍵字進行搜尋 (例如：2026-07 或 2026-07-16)：", "")
+    # 🎯 變更：搜尋方式改為與截圖一樣之單選按鈕 (Radio Button)
+    search_option = st.radio(
+        "選擇歷史紀錄查詢區間：",
+        ["近 7 天", "近 30 天", "近 180 天", "今年以來 (YTD)", "全部顯示", "自訂日期範圍"],
+        horizontal=True,
+        key="history_search_range"
+    )
     
     df_display = df_history.copy()
     
     # 統一日期格式並降序排列 (最新在前)
     df_display['日期'] = pd.to_datetime(df_display['日期'])
     df_display = df_display.sort_values(by="日期", ascending=False)
+    
+    today = datetime.now()
+    
+    # 根據單選按鈕進行區間篩選
+    if search_option == "近 7 天":
+        start_date = today - timedelta(days=7)
+        df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
+    elif search_option == "近 30 天":
+        start_date = today - timedelta(days=30)
+        df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
+    elif search_option == "近 180 天":
+        start_date = today - timedelta(days=180)
+        df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
+    elif search_option == "今年以來 (YTD)":
+        start_date = datetime(today.year, 1, 1)
+        df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
+    elif search_option == "自訂日期範圍":
+        col_date1, col_date2 = st.columns(2)
+        with col_date1:
+            start_date_input = st.date_input("查詢開始日期：", today - timedelta(days=30), key="query_start")
+        with col_date2:
+            end_date_input = st.date_input("查詢結束日期：", today, key="query_end")
+        df_display = df_display[(df_display['日期'] >= pd.to_datetime(start_date_input)) & (df_display['日期'] <= pd.to_datetime(end_date_input))]
+        
+    # 將日期轉回字串格式，方便表格美化顯示
     df_display['日期'] = df_display['日期'].dt.strftime("%Y-%m-%d")
     
-    if search_query:
-        df_display = df_display[df_display['日期'].str.contains(search_query)]
-        
-    # 2. 分頁計算 (每頁 10 筆)
+    # 🎯 優化：前端表格顯示數據時，也強制將金額與增額轉成無小數點整數顯示
+    df_display['總資產金額'] = pd.to_numeric(df_display['總資產金額'], errors='coerce').fillna(0).round().astype(int)
+    df_display['每日增額'] = pd.to_numeric(df_display['每日增額'], errors='coerce').fillna(0).round().astype(int)
+    
+    # 分頁計算 (每頁 10 筆)
     rows_per_page = 10
     total_rows = len(df_display)
     
@@ -412,10 +457,9 @@ elif menu == "✍️ 每日資產動態輸入":
         start_idx = (current_page - 1) * rows_per_page
         end_idx = start_idx + rows_per_page
         
-        # 美化表格輸出呈現
         st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
     else:
-        st.info("ℹ️ 查無符合條件的歷史紀錄。")
+        st.info("ℹ️ 該時間區間內查無歷史紀錄。")
 
 # ==========================================
 # 功能三：⚙️ 投資標的持股管理
