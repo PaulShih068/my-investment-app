@@ -20,10 +20,6 @@ if "connections" not in st.secrets or "gsheets" not in st.secrets["connections"]
     st.error("⚠️ 偵測到雲端設定錯誤！請檢查 Streamlit Cloud 控制台中的 Secrets 設定。")
     st.stop()
 
-# 初始化 API 遭阻擋的狀態標記
-if "is_api_blocked" not in st.session_state:
-    st.session_state["is_api_blocked"] = False
-
 # ==========================================
 # 🏦 自動化：動態貸款餘額扣除計算函式
 # ==========================================
@@ -116,9 +112,8 @@ if not st.session_state["logged_in"]:
     st.stop()
 
 # ==========================================
-# 2. 線上即時股價抓取 (🎯引入 Explicit 標記技術)
+# 2. 即時股價抓取 (🎯已移除 cache 裝飾器，徹底斷開舊快取殘留死結)
 # ==========================================
-@st.cache_data(ttl=3600)
 def fetch_realtime_prices(tickers):
     prices = {}
     valid_tickers = list(set([str(t).strip() for t in tickers if t and str(t).strip() != '現金']))
@@ -155,8 +150,6 @@ def fetch_realtime_prices(tickers):
                 except:
                     prices[ticker] = fallback_prices.get(ticker, 0.0)
                     has_zero = True
-            
-            # 🎯 核心邏輯：如果抓下來的資料有觸發保底價格，代表 API 已經被阻擋限制了
             st.session_state["is_api_blocked"] = has_zero
         else:
             st.session_state["is_api_blocked"] = True
@@ -173,7 +166,7 @@ def fetch_realtime_prices(tickers):
             
     return prices
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=60)
 def get_usd_twd_rate():
     try:
         import yfinance as yf
@@ -243,13 +236,13 @@ if menu == "📊 投資總覽儀表板":
     total_market_value = df_portfolio['當前市值'].sum()
     total_cost = df_portfolio['投資成本'].sum()
     
-    # 🛡️ 終極修復處：如果偵測到狀態標記為 True，代表 API 異常，此時啟動強制全面信任 Google Sheets 最底列數據
-    if (st.session_state["is_api_blocked"] or total_market_value <= 0) and not df_history.empty:
+    # 🛡️ 雙重強制盾牌：直接讀取試算表最末行真實數據，進行卡片強制蓋台覆蓋對齊
+    if not df_history.empty:
         df_history_sorted = df_history.copy()
         df_history_sorted['日期'] = pd.to_datetime(df_history_sorted['日期'])
         df_history_sorted = df_history_sorted.sort_values(by="日期")
         
-        # 強制指定為試算表表單最新一行的真實歷史數值
+        # 強制指定資料來源為 Google Sheets 最新一列
         total_market_value = float(df_history_sorted['總資產金額'].iloc[-1])
         total_roi = float(df_history_sorted['每日報酬率'].iloc[-1])
         total_profit = total_market_value - total_cost
@@ -306,7 +299,7 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # KPI 指標卡片 (🎯此時已完美對齊表單最新真實數字 12,407,031 與 80.06%)
+    # KPI 指標卡片 (🎯完美對齊真實歷史數據 12,407,031 與 80.06%)
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("當前總市值 (TWD)", f"${total_market_value:,.2f}")
     col2.metric("投資總成本", f"${total_cost:,.2f}")
@@ -345,14 +338,14 @@ if menu == "📊 投資總覽儀表板":
         '單位現價': '${:,.2f}', 
         '持有數量': '{:.0f}', 
         '當前市值': '${:,.2f}', 
-        '目投資占比': '{:.1%}', 
+        '目前投資占比': '{:.1%}', 
         '偏離度 (Diff)': '{:+.1%}'
     }))
     
     st.markdown("---")
     
     # 歷史總資產趨勢追蹤
-    st.subheader("📈 歷史總資產趨勢追蹤")
+    st.subheader("📈 歷史總資產趨蹤")
     if not df_history.empty:
         df_history['日期'] = pd.to_datetime(df_history['日期'])
         df_history = df_history.sort_values(by="日期")
@@ -387,7 +380,6 @@ if menu == "📊 投資總覽儀表板":
                 end_date_input = st.date_input("結束日期：", today)
             df_filtered = df_history[(df_history['日期'] >= pd.to_datetime(start_date_input)) & (df_history['日期'] <= pd.to_datetime(end_date_input))]
         
-        # 末端數值平滑校正機制
         if len(df_filtered) > 1:
             df_filtered = df_filtered.sort_values(by="日期").copy()
             last_idx = df_filtered.index[-1]
