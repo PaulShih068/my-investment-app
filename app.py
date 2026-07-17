@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from streamlit_gsheets import GSheetsConnection
 
 # ==========================================
@@ -20,20 +20,74 @@ if "connections" not in st.secrets or "gsheets" not in st.secrets["connections"]
     st.stop()
 
 # ==========================================
+# 🏦 自動化：動態貸款餘額扣除計算函式 (已優化雙起算點)
+# ==========================================
+def calculate_remaining_loans(current_date):
+    """
+    依據當前日期，採用獨立基準日自動計算兩筆貸款的剩餘金額
+    """
+    # ------------------ 第一筆貸款設定 ------------------
+    l1_base = 694202
+    l1_day = 20
+    l1_pay = 12797
+    l1_base_date = date(2026, 7, 1)  # 7/20還款前之基準日
+    
+    # ------------------ 第二筆貸款設定 ------------------
+    l2_base = 1941174
+    l2_day = 10
+    l2_pay = 18872
+    l2_base_date = date(2026, 7, 11) # 7/10還款後之基準日 (避免重複扣除7月)
+    
+    # 計算第一筆貸款累計還款次數
+    l1_payments = 0
+    start_yr_1, start_mo_1 = l1_base_date.year, l1_base_date.month
+    end_yr, end_mo = current_date.year, current_date.month
+    
+    current_yr, current_mo = start_yr_1, start_mo_1
+    while (current_yr < end_yr) or (current_yr == end_yr and current_mo <= end_mo):
+        pay_date_l1 = date(current_yr, current_mo, l1_day)
+        if l1_base_date <= pay_date_l1 <= current_date:
+            l1_payments += 1
+            
+        if current_mo == 12:
+            current_mo = 1
+            current_yr += 1
+        else:
+            current_mo += 1
+            
+    # 計算第二筆貸款累計還款次數
+    l2_payments = 0
+    start_yr_2, start_mo_2 = l2_base_date.year, l2_base_date.month
+    
+    current_yr, current_mo = start_yr_2, start_mo_2
+    while (current_yr < end_yr) or (current_yr == end_yr and current_mo <= end_mo):
+        pay_date_l2 = date(current_yr, current_mo, l2_day)
+        if l2_base_date <= pay_date_l2 <= current_date:
+            l2_payments += 1
+            
+        if current_mo == 12:
+            current_mo = 1
+            current_yr += 1
+        else:
+            current_mo += 1
+            
+    # 計算剩餘金額 (確保不為負數)
+    l1_rem = max(0, l1_base - (l1_payments * l1_pay))
+    l2_rem = max(0, l2_base - (l2_payments * l2_pay))
+    
+    return l1_rem, l2_rem, l1_payments, l2_payments
+
+# ==========================================
 # 🔒 系統安全登入驗證機制 (Session State)
 # ==========================================
-# 初始化登入狀態
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 
-# 如果尚未登入，顯示登入畫面並阻擋後續程式執行
 if not st.session_state["logged_in"]:
     st.markdown("<h2 style='text-align: center;'>🔒 智慧投資紀錄簿 - 系統登入</h2>", unsafe_allow_html=True)
     st.write("")
     
-    # 建立登入表單置中
     col_space1, col_login, col_space2 = st.columns([1, 2, 1])
-    
     with col_login:
         with st.form("login_form", clear_on_submit=False):
             username_input = st.text_input("請輸入管理員帳號：")
@@ -42,27 +96,22 @@ if not st.session_state["logged_in"]:
             
             if submit_login:
                 try:
-                    # 即時向 Google Sheets 讀取 credentials
                     df_creds = conn.read(worksheet="user_credentials", ttl=0)
                     df_creds = df_creds.dropna(subset=["帳號", "密碼"])
-                    
-                    # 比對輸入的帳號密碼是否存在於資料表中
                     match = df_creds[
                         (df_creds["帳號"].astype(str) == username_input) & 
                         (df_creds["密碼"].astype(str) == password_input)
                     ]
-                    
                     if not match.empty:
                         st.session_state["logged_in"] = True
                         st.session_state["username"] = username_input
                         st.success("🎉 登入成功！正在跳轉...")
-                        st.rerun()  # 重新整理網頁以載入儀表板
+                        st.rerun()
                     else:
                         st.error("❌ 帳號或密碼錯誤，請重新確認！")
                 except Exception as e:
-                    st.error(f"❌ 驗證失敗。請確認 Google 試算表中是否已建立 `user_credentials` 工作表。 錯誤: {e}")
-                    
-    st.stop()  # 強制中斷，不讓未登入者看到下方的儀表板內容
+                    st.error(f"❌ 驗證失敗。請確認是否已建立 `user_credentials` 工作表。 錯誤: {e}")
+    st.stop()
 
 # ==========================================
 # 2. 自動化功能：線上即時股價與匯率抓取
@@ -104,7 +153,6 @@ st.sidebar.write(f"👤 目前使用者：`{st.session_state['username']}`")
 
 menu = st.sidebar.radio("請選擇操作功能：", ["📊 投資總覽儀表板", "✍️ 每日資產動態輸入", "⚙️ 投資標的持股管理"])
 
-# 建立安全登出按鈕
 st.sidebar.markdown("---")
 if st.sidebar.button("🔓 安全登出系統", use_container_width=True):
     st.session_state["logged_in"] = False
@@ -132,6 +180,11 @@ if menu == "📊 投資總覽儀表板":
         usd_twd_rate = get_usd_twd_rate()
     
     st.sidebar.metric("💵 當前美金匯率 (USD/TWD)", f"${usd_twd_rate:.4f}")
+    
+    # 核心：執行優化後的動態貸款餘額計算
+    today_date = datetime.now().date()
+    l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(today_date)
+    total_loan_balance = l1_remain + l2_remain
     
     df_portfolio['單位現價'] = df_portfolio['Yahoo代號'].map(current_prices)
     
@@ -186,15 +239,26 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
+    # 頂部 Kpi 指標區卡片
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("當前總市值 (TWD)", f"${total_market_value:,.2f}")
     col2.metric("投資總成本", f"${total_cost:,.2f}")
     col3.metric("累積投資獲利", f"${total_profit:,.2f}", delta=f"{total_roi*100:.2f}% 報酬率")
     
-    mock_loan = 2650197
-    maintenance_rate = (total_market_value / mock_loan) if mock_loan > 0 else 0
+    # 動態維持率計算公式 (套用修正後的總貸款餘額)
+    maintenance_rate = (total_market_value / total_loan_balance) if total_loan_balance > 0 else 0
     col4.metric("質押維持率", f"{maintenance_rate*100:.2f}%", delta="✅ 水位強韌" if maintenance_rate > 1.6 else "⚠️ 需注意風險")
     
+    # 展示自動化貸款餘額明細的 UI 區域 (完美呈現剩餘貸款)
+    st.markdown("### 🏦 剩餘貸款與還款明細")
+    loan_col1, loan_col2, loan_col3 = st.columns(3)
+    with loan_col1:
+        st.info(f"**第一筆貸款 (每月 20 號還款)**\n* 剩餘金額：`${l1_remain:,.0f}` 元\n* 月還款額：`${12797:,.0f}` 元\n* 累計已還款：`{l1_pay_count}` 期\n*(基準起算點：2026-07-01)*")
+    with loan_col2:
+        st.info(f"**第二筆貸款 (每月 10 號還款)**\n* 剩餘金額：`${l2_remain:,.0f}` 元\n* 月還款額：`${18872:,.0f}` 元\n* 累計已還款：`{l2_pay_count}` 期\n*(基準起算點：2026-07-11 - 已扣本月)*")
+    with loan_col3:
+        st.success(f"**📊 總剩餘負債統計**\n* 總剩餘貸款：`${total_loan_balance:,.0f}` 元\n* 當前安全維持率分母：`${total_loan_balance:,.0f}`")
+
     st.markdown("---")
     
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
@@ -219,6 +283,7 @@ if menu == "📊 投資總覽儀表板":
     
     st.subheader("📈 歷史總資產趨勢追蹤")
     if not df_history.empty:
+        df_history['開設'] = df_history['日期'] # 防錯機制
         df_history['日期'] = pd.to_datetime(df_history['日期'])
         df_history = df_history.sort_values(by="日期")
         
@@ -274,7 +339,7 @@ elif menu == "✍️ 每日資產動態輸入":
         
         if submit_button:
             date_str = str(input_date)
-            df_history['開頭'] = df_history['日期'].astype(str)
+            df_history['日期'] = df_history['日期'].astype(str)
             
             if not df_history.empty:
                 df_history_temp = df_history.copy()
