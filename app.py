@@ -20,23 +20,27 @@ if "connections" not in st.secrets or "gsheets" not in st.secrets["connections"]
     st.stop()
 
 # ==========================================
-# 🏦 自動化：動態貸款餘額扣除計算函式 (已優化雙起算點)
+# 🏦 自動化：動態貸款餘額扣除計算函式 (歷史起算點版)
 # ==========================================
 def calculate_remaining_loans(current_date):
     """
-    依據當前日期，採用獨立基準日自動計算兩筆貸款的剩餘金額
+    依據當前日期，採用獨立歷史起算點，自動計算兩筆貸款的累計已還款期數與剩餘金額
     """
     # ------------------ 第一筆貸款設定 ------------------
-    l1_base = 694202
+    # 基準起算點：2024-04-20 (截至 2026-07-17 已還款 27 期)
+    # 推算原始起算金額：694,202 + (27 * 12,797) = 1,039,721
+    l1_base = 1039721
     l1_day = 20
     l1_pay = 12797
-    l1_base_date = date(2026, 7, 1)  # 7/20還款前之基準日
+    l1_base_date = date(2024, 4, 20)
     
     # ------------------ 第二筆貸款設定 ------------------
-    l2_base = 1941174
+    # 基準起算點：2026-04-10 (截至 2026-07-17 已還款 4 期)
+    # 推算原始起算金額：1,941,174 + (4 * 18,872) = 2,016,662
+    l2_base = 2016662
     l2_day = 10
     l2_pay = 18872
-    l2_base_date = date(2026, 7, 11) # 7/10還款後之基準日 (避免重複扣除7月)
+    l2_base_date = date(2026, 4, 10)
     
     # 計算第一筆貸款累計還款次數
     l1_payments = 0
@@ -181,7 +185,7 @@ if menu == "📊 投資總覽儀表板":
     
     st.sidebar.metric("💵 當前美金匯率 (USD/TWD)", f"${usd_twd_rate:.4f}")
     
-    # 核心：執行優化後的動態貸款餘額計算
+    # 核心：執行優化後的動態歷史貸款餘額計算
     today_date = datetime.now().date()
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(today_date)
     total_loan_balance = l1_remain + l2_remain
@@ -245,17 +249,17 @@ if menu == "📊 投資總覽儀表板":
     col2.metric("投資總成本", f"${total_cost:,.2f}")
     col3.metric("累積投資獲利", f"${total_profit:,.2f}", delta=f"{total_roi*100:.2f}% 報酬率")
     
-    # 動態維持率計算公式 (套用修正後的總貸款餘額)
+    # 動態維持率計算公式 (套用歷史基準起算的貸款餘額)
     maintenance_rate = (total_market_value / total_loan_balance) if total_loan_balance > 0 else 0
     col4.metric("質押維持率", f"{maintenance_rate*100:.2f}%", delta="✅ 水位強韌" if maintenance_rate > 1.6 else "⚠️ 需注意風險")
     
-    # 展示自動化貸款餘額明細的 UI 區域 (完美呈現剩餘貸款)
+    # 展示自動化貸款餘額明細的 UI 區域 (精準呈現歷史基準進度)
     st.markdown("### 🏦 剩餘貸款與還款明細")
     loan_col1, loan_col2, loan_col3 = st.columns(3)
     with loan_col1:
-        st.info(f"**第一筆貸款 (每月 20 號還款)**\n* 剩餘金額：`${l1_remain:,.0f}` 元\n* 月還款額：`${12797:,.0f}` 元\n* 累計已還款：`{l1_pay_count}` 期\n*(基準起算點：2026-07-01)*")
+        st.info(f"**第一筆貸款 (每月 20 號還款)**\n* 剩餘金額：`${l1_remain:,.0f}` 元\n* 月還款額：`${12797:,.0f}` 元\n* 累計已還款：`{l1_pay_count}` 期\n*(基準起算點：2024-04-20)*")
     with loan_col2:
-        st.info(f"**第二筆貸款 (每月 10 號還款)**\n* 剩餘金額：`${l2_remain:,.0f}` 元\n* 月還款額：`${18872:,.0f}` 元\n* 累計已還款：`{l2_pay_count}` 期\n*(基準起算點：2026-07-11 - 已扣本月)*")
+        st.info(f"**第二筆貸款 (每月 10 號還款)**\n* 剩餘金額：`${l2_remain:,.0f}` 元\n* 月還款額：`${18872:,.0f}` 元\n* 累計已還款：`{l2_pay_count}` 期\n*(基準起算點：2026-04-10)*")
     with loan_col3:
         st.success(f"**📊 總剩餘負債統計**\n* 總剩餘貸款：`${total_loan_balance:,.0f}` 元\n* 當前安全維持率分母：`${total_loan_balance:,.0f}`")
 
@@ -283,7 +287,6 @@ if menu == "📊 投資總覽儀表板":
     
     st.subheader("📈 歷史總資產趨勢追蹤")
     if not df_history.empty:
-        df_history['開設'] = df_history['日期'] # 防錯機制
         df_history['日期'] = pd.to_datetime(df_history['日期'])
         df_history = df_history.sort_values(by="日期")
         
