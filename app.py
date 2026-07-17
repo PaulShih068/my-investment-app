@@ -211,7 +211,6 @@ if menu == "📊 投資總覽儀表板":
         today_str = datetime.now().strftime("%Y-%m-%d")
         df_history['日期'] = df_history['日期'].astype(str)
         
-        # 精準計算昨日金額
         df_history_temp = df_history.copy()
         df_history_temp['日期'] = pd.to_datetime(df_history_temp['日期'])
         df_history_temp = df_history_temp.sort_values(by="日期")
@@ -226,7 +225,6 @@ if menu == "📊 投資總覽儀表板":
             
         daily_roi = round(total_roi, 4)
             
-        # 🎯 優化：寫入最新一筆資料時進行四捨五入整數化 (沒有小數點)
         total_market_value_rounded = int(round(total_market_value))
         daily_diff_rounded = int(round(daily_diff))
             
@@ -292,6 +290,7 @@ if menu == "📊 投資總覽儀表板":
     
     st.markdown("---")
     
+    # 🌟 歷史總資產趨勢追蹤 (已加入最新一天自動過濾邏輯) 🌟
     st.subheader("📈 歷史總資產趨勢追蹤")
     if not df_history.empty:
         df_history['日期'] = pd.to_datetime(df_history['日期'])
@@ -327,6 +326,14 @@ if menu == "📊 投資總覽儀表板":
                 end_date_input = st.date_input("結束日期：", today)
             df_filtered = df_history[(df_history['日期'] >= pd.to_datetime(start_date_input)) & (df_history['日期'] <= pd.to_datetime(end_date_input))]
         
+        # 🎯 核心優化：檢查最新一天的數據是否尚未 finalize 或是沒有數值
+        if len(df_filtered) > 0:
+            df_filtered = df_filtered.sort_values(by="日期")
+            last_row = df_filtered.iloc[-1]
+            # 如果最新一天的每日增額與報酬率皆為 0 或空值，則自動從曲線圖中過濾，避免折線下墜
+            if (pd.isna(last_row['每日增額']) or last_row['每日增額'] == 0) and (pd.isna(last_row['每日報酬率']) or last_row['每日報酬率'] == 0):
+                df_filtered = df_filtered.iloc[:-1]
+        
         if not df_filtered.empty:
             fig = px.line(df_filtered, x="日期", y="總資產金額", title=f"資產總額成長曲線 ({time_option})", markers=True)
             st.plotly_chart(fig, use_container_width=True)
@@ -356,7 +363,6 @@ elif menu == "✍️ 每日資產動態輸入":
             date_str = str(input_date)
             df_history['日期'] = df_history['日期'].astype(str)
             
-            # 排序並過濾
             df_history_temp = df_history.copy()
             df_history_temp['日期'] = pd.to_datetime(df_history_temp['日期'])
             df_history_temp = df_history_temp.sort_values(by="日期")
@@ -371,7 +377,6 @@ elif menu == "✍️ 每日資產動態輸入":
                 
             daily_roi = round((input_amount - total_cost) / total_cost, 4) if total_cost > 0 else 0.0
                 
-            # 🎯 優化：手動表單寫入最新一筆資料時進行四捨五入整數化
             input_amount_rounded = int(round(input_amount))
             daily_diff_rounded = int(round(daily_diff))
                 
@@ -395,11 +400,9 @@ elif menu == "✍️ 每日資產動態輸入":
                 conn.update(worksheet="daily_asset_history", data=df_history)
             st.success("🎉 成功同步至雲端試算表！數值已自動四捨五入為整數。")
             
-    # 🌟 優化優點：歷史資產紀錄查詢與管理 🌟
     st.markdown("---")
     st.subheader("📋 歷史資產紀錄查詢與管理")
     
-    # 🎯 變更：搜尋方式改為與截圖一樣之單選按鈕 (Radio Button)
     search_option = st.radio(
         "選擇歷史紀錄查詢區間：",
         ["近 7 天", "近 30 天", "近 180 天", "今年以來 (YTD)", "全部顯示", "自訂日期範圍"],
@@ -408,14 +411,11 @@ elif menu == "✍️ 每日資產動態輸入":
     )
     
     df_display = df_history.copy()
-    
-    # 統一日期格式並降序排列 (最新在前)
     df_display['日期'] = pd.to_datetime(df_display['日期'])
     df_display = df_display.sort_values(by="日期", ascending=False)
     
     today = datetime.now()
     
-    # 根據單選按鈕進行區間篩選
     if search_option == "近 7 天":
         start_date = today - timedelta(days=7)
         df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
@@ -436,27 +436,22 @@ elif menu == "✍️ 每日資產動態輸入":
             end_date_input = st.date_input("查詢結束日期：", today, key="query_end")
         df_display = df_display[(df_display['日期'] >= pd.to_datetime(start_date_input)) & (df_display['日期'] <= pd.to_datetime(end_date_input))]
         
-    # 將日期轉回字串格式，方便表格美化顯示
     df_display['日期'] = df_display['日期'].dt.strftime("%Y-%m-%d")
     
-    # 🎯 優化：前端表格顯示數據時，也強制將金額與增額轉成無小數點整數顯示
     df_display['總資產金額'] = pd.to_numeric(df_display['總資產金額'], errors='coerce').fillna(0).round().astype(int)
     df_display['每日增額'] = pd.to_numeric(df_display['每日增額'], errors='coerce').fillna(0).round().astype(int)
     
-    # 分頁計算 (每頁 10 筆)
     rows_per_page = 10
     total_rows = len(df_display)
     
     if total_rows > 0:
         total_pages = int(np.ceil(total_rows / rows_per_page))
-        
         col_page_sel, col_page_info = st.columns([1, 4])
         with col_page_sel:
             current_page = st.number_input(f"頁碼 (共 {total_pages} 頁)", min_value=1, max_value=total_pages, value=1, step=1)
         
         start_idx = (current_page - 1) * rows_per_page
         end_idx = start_idx + rows_per_page
-        
         st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
     else:
         st.info("ℹ️ 該時間區間內查無歷史紀錄。")
