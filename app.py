@@ -173,7 +173,9 @@ def fetch_realtime_prices(tickers):
             has_zero = False
             for ticker in valid_tickers:
                 try:
-                    df_ticker = data if len(valid_tickers) == 1 else data[ticker]
+                    # 處理含有冒號的交易所前綴以利 yfinance 讀取
+                    clean_yf_ticker = ticker.split(':')[-1] if ':' in ticker else ticker
+                    df_ticker = data if len(valid_tickers) == 1 else data[clean_yf_ticker]
                     if 'Close' in df_ticker.columns:
                         closes = df_ticker['Close'].dropna()
                         if not closes.empty and float(closes.iloc[-1]) > 0:
@@ -485,11 +487,8 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_pct'] if 'currently_market_pct' in df_portfolio.columns else (df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重'])
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
     
-    if '偏離度 (Diff)' not in df_portfolio.columns or df_portfolio['偏離度 (Diff)'].isna().all():
-        df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
-
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
             return f"⚠️ 建議減碼 {row['標的名稱']}"
@@ -602,7 +601,7 @@ elif menu == "✍️ 每日資產動態輸入":
             st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
 
 # ==========================================
-# 功能三：⚙️ 投資標的持股管理 (🎯 已修正 float64 資料型態死結)
+# 功能三：⚙️ 投資標的持股管理 (🎯 已升級多維公式語法智慧解析防禦網)
 # ==========================================
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
@@ -616,36 +615,51 @@ elif menu == "⚙️ 投資標的持股管理":
     df_portfolio_raw = df_portfolio_raw.dropna(subset=["標的名稱"])
     
     st.subheader("✏️ 線上編輯持股資訊")
-    st.info("💡 智慧公式保護網已部署：您可以自由修改標的、權重、數量與成本。當您點擊儲存時，系統將全自動利用『公式還原引擎』將個股現價重新編譯為 GOOGLEFINANCE 公式字串寫回雲端，絕對不破壞試算表的動態股價更新！")
+    st.info("💡 智慧公式保護網已升級：系統已全面擴充公式還原引擎！現在除了台股，包含美股交易所指定公式 (如 `NASDAQ:QQQM`) 以及美金貨幣匯率公式 (如 `CURRENCY:USDTWD`)，皆能在點擊儲存後完整識別並重新注入，絕對不會消失！")
     
     edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_safe_editor")
     
     if st.button("💾 儲存並同步至 Google Sheets"):
-        with st.spinner('正在重新編譯並還原 Google 試算表公式...'):
+        with st.spinner('正在編譯並安全復原所有多維度試算表公式...'):
             try:
                 # 建立上傳副本
                 final_upload_df = edited_df.copy()
                 
-                # 🎯 終極修正核心：將『個股現價』直欄的型態強行解鎖為字串（str / object）
-                # 這樣一來，Pandas 就不會判定它只能裝 float64 數字，字串公式就能完美注入！
+                # 解鎖 Pandas 浮點數限制，允許注入字串
                 final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
                 
-                # 走訪每一列，依照 Yahoo 代號重組對應的 GOOGLEFINANCE 公式字串
+                # 走訪每一列，精準識別資產特徵並補回各自專屬公式
                 for idx, row in final_upload_df.iterrows():
                     ticker = str(row.get('Yahoo代號', '')).strip()
                     name = str(row.get('標的名稱', '')).strip()
                     
-                    if any(k in ticker for k in ['台幣', '美金', '現金']) or any(k in name for k in ['台幣', '美金', '現金']) or ticker == '' or ticker.lower() == 'nan':
+                    # 1. 優先攔截美金外幣匯率項目 (如：CURRENCY:USDTWD 或代號/名稱內含 USDTWD、匯率等字樣)
+                    if "USDTWD" in ticker.upper() or "CURRENCY" in ticker.upper() or "匯率" in name:
+                        final_upload_df.at[idx, '個股現價'] = '=GOOGLEFINANCE("CURRENCY:USDTWD")'
+                    
+                    # 2. 處理現金/台幣項目，不填公式，維持原數值
+                    elif any(k in ticker for k in ['台幣', '現金']) or any(k in name for k in ['台幣', '現金']) or ticker == '' or ticker.lower() == 'nan':
                         continue
-                    else:
-                        if ticker.upper().endswith('.TW'):
-                            stock_code = ticker.split('.')[0]
-                            formula_str = f'=GOOGLEFINANCE("TPE:{stock_code}")'
-                        else:
-                            formula_str = f'=GOOGLEFINANCE("{ticker}")'
                         
-                        # 成功注入公式字串，不再引發 dtype 衝突報錯
-                        final_upload_df.at[idx, '個股現價'] = formula_str
+                    # 3. 處理股票/ETF證券標的
+                    else:
+                        # 3a. 如果代號本體就已經填寫了 NASDAQ 等交易所前綴 (如 NASDAQ:QQQM)
+                        if ":" in ticker:
+                            # 拼裝出完整的指定交易所規格公式 ➜ =GOOGLEFINANCE("NASDAQ:QQQM", "price")
+                            final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}", "price")'
+                        
+                        # 3b. 如果代號包含 QQQM 且未帶字首，但名稱表明為美股，可在此處特別為其加上 NASDAQ: 前綴
+                        elif "QQQM" in ticker.upper():
+                            final_upload_df.at[idx, '個股現價'] = '=GOOGLEFINANCE("NASDAQ:QQQM", "price")'
+                            
+                        # 3c. 處理一般台股標的 (例如 00631L.TW)
+                        elif ticker.upper().endswith('.TW'):
+                            stock_code = ticker.split('.')[0]
+                            final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("TPE:{stock_code}")'
+                            
+                        # 3d. 通用美股標的處理
+                        else:
+                            final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
                 
                 # 移除網頁前端唯讀的輔助計算欄位
                 final_upload_df = final_upload_df.drop(
@@ -653,10 +667,10 @@ elif menu == "⚙️ 投資標的持股管理":
                     errors='ignore'
                 )
                 
-                # 🚀 呼叫官方標準 update 機制完成無損覆蓋
+                # 🚀 呼叫官方標準 update 機制安全回寫雲端
                 conn.update(worksheet="portfolio_config", data=final_upload_df)
                 
-                st.success("🎉 公式防禦任務大成功！持股變更已寫入，且雲端公式已全自動補回再激活！")
+                st.success("🎉 公式多元防禦任務大成功！所有台股、美股與外幣匯率公式已全數完整保留！")
                 st.cache_data.clear()
                 st.rerun()
                 
