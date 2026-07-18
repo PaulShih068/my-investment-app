@@ -286,11 +286,10 @@ def background_scheduler():
 st.sidebar.title("🧭 投資導覽控制台")
 st.sidebar.write(f"👤 目前使用者：`{st.session_state['username']}`")
 
-# 🎯 終極修復版：從 Google Sheets 載入、編輯並固化持久排程時間（最多5組）
 st.sidebar.markdown("---")
 st.sidebar.subheader("⏰ 雲端持久化自動排程設定")
 
-# 第一步：嘗試從 Google Sheets 載入已固化的時間
+# 從 Google Sheets 載入已固化的時間
 try:
     df_load_sched = conn.read(worksheet="scheduler_config", ttl=0)
     if df_load_sched.empty or "觸發時間" not in df_load_sched.columns:
@@ -302,7 +301,6 @@ except Exception:
 
 init_count = min(max(len(initial_times), 1), 5)
 
-# 第二步：UI 渲染更新次數與時間選擇器
 num_times = st.sidebar.number_input("設定每日定時更新次數 (最多5次)：", min_value=1, max_value=5, value=init_count, step=1)
 
 scheduled_times_list = []
@@ -319,7 +317,6 @@ for i in range(int(num_times)):
     chosen_time = st.sidebar.time_input(f"選擇第 {i+1} 組同步時間點：", default_t, key=f"sched_persist_t_{i}")
     scheduled_times_list.append(chosen_time.strftime("%H:%M"))
 
-# 第三步：手動按下按鈕，直接將設定寫入雲端硬碟，徹底杜絕網頁重整歸零的 Bug
 if st.sidebar.button("💾 儲存並啟用雲端排程", use_container_width=True):
     df_save_sched = pd.DataFrame({
         "排程順序": [f"第 {x+1} 組" for x in range(len(scheduled_times_list))],
@@ -477,12 +474,140 @@ if menu == "📊 投資總覽儀表板":
             
     df_portfolio['買賣建議'] = df_portfolio.apply(generate_advice, axis=1)
     st.dataframe(df_portfolio[['標的名稱', '核心權重', '單位現價', '持有數量', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議']].style.format({
-        '核心權重': '{:.1%}', '單位現價': '${:,.2f}', '持有數量': '{:.0f}', '當前市值': '${:,.2f}', '目前投資占比': '{:.1%}', '偏離度 (Diff)': '{:+.1%}'
+        '核心權重': '{:.1%}', '單位現價': '${:Rx:,.2f}', '持有數量': '{:.0f}', '當前市值': '${:,.2f}', '目前投資占比': '{:.1%}', '偏離度 (Diff)': '{:+.1%}'
     }))
 
+# ==========================================
+# 功能二：✍️ 每日資產動態輸入 (完整恢復)
+# ==========================================
 elif menu == "✍️ 每日資產動態輸入":
     st.title("✍️ 每日資產金額輕鬆記")
-    # ...[代碼完全保持原樣]...
+    try:
+        df_history = conn.read(worksheet="daily_asset_history", ttl=0)
+        df_portfolio = conn.read(worksheet="portfolio_config", ttl=0)
+    except Exception as e:
+        st.error(f"❌ 讀取失敗: {e}")
+        st.stop()
+        
+    df_history = df_history.dropna(subset=["日期"])
+    df_portfolio = df_portfolio.dropna(subset=["標的名稱"])
+    total_cost = df_portfolio['投資成本'].sum()
+    
+    with st.form("daily_input_form", clear_on_submit=True):
+        input_date = st.date_input("選擇紀錄日期：", datetime.now())
+        input_amount = st.number_input("今日結算總資產金額 (TWD)：", min_value=0.0, step=1000.0, format="%.2f")
+        submit_button = st.form_submit_button(label="🚀 提交並儲存至 Google Sheets")
+        
+        if submit_button:
+            date_str = str(input_date)
+            df_history['日期'] = df_history['日期'].astype(str)
+            
+            df_history_temp = df_history.copy()
+            df_history_temp['日期'] = pd.to_datetime(df_history_temp['日期'])
+            df_history_temp = df_history_temp.sort_values(by="日期")
+            df_history_temp['日期'] = df_history_temp['日期'].dt.strftime("%Y-%m-%d")
+            
+            df_yesterday = df_history_temp[df_history_temp['日期'] < date_str]
+            if not df_yesterday.empty:
+                last_amount = float(df_yesterday['總資產金額'].iloc[-1])
+                daily_diff = input_amount - last_amount
+            else:
+                daily_diff = 0.0
+                
+            daily_roi = round((input_amount - total_cost) / total_cost, 4) if total_cost > 0 else 0.0
+            input_amount_rounded = int(round(input_amount))
+            daily_diff_rounded = int(round(daily_diff))
+                
+            new_data = {
+                "日期": date_str,
+                "總資產金額": input_amount_rounded,
+                "每日增額": daily_diff_rounded,
+                "每日報酬率": float(daily_roi)
+            }
+            
+            if date_str in df_history['日期'].values:
+                df_history.loc[df_history['日期'] == date_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
+                    input_amount_rounded, 
+                    daily_diff_rounded, 
+                    float(daily_roi)
+                ]
+            else:
+                df_history = pd.concat([df_history, pd.DataFrame([new_data])], ignore_index=True)
+            
+            with st.spinner('正在寫入...'):
+                conn.update(worksheet="daily_asset_history", data=df_history)
+            st.success("🎉 成功同步至雲端試算表！數值已自動四捨五入為整數。")
+            
+    st.markdown("---")
+    st.subheader("📋 歷史資產紀錄查詢與管理")
+    
+    search_option = st.radio(
+        "選擇歷史紀錄查詢區間：",
+        ["近 7 天", "近 30 天", "近 180 天", "今年以來 (YTD)", "全部顯示", "自訂日期範圍"],
+        horizontal=True,
+        key="history_search_range"
+    )
+    
+    df_display = df_history.copy()
+    df_display['日期'] = pd.to_datetime(df_display['日期'])
+    df_display = df_display.sort_values(by="日期", ascending=False)
+    today = datetime.now()
+    
+    if search_option == "近 7 天":
+        start_date = today - timedelta(days=7)
+        df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
+    elif search_option == "近 30 天":
+        start_date = today - timedelta(days=30)
+        df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
+    elif search_option == "近 180 天":
+        start_date = today - timedelta(days=180)
+        df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
+    elif search_option == "今年以來 (YTD)":
+        start_date = datetime(today.year, 1, 1)
+        df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
+    elif search_option == "自訂日期範圍":
+        col_date1, col_date2 = st.columns(2)
+        with col_date1:
+            st.date_input("查詢開始日期：", today - timedelta(days=30), key="query_start")
+        with col_date2:
+            st.date_input("查詢結束日期：", today, key="query_end")
+        df_display = df_display[(df_display['日期'] >= pd.to_datetime(st.session_state.query_start)) & (df_display['日期'] <= pd.to_datetime(st.session_state.query_end))]
+        
+    df_display['日期'] = df_display['日期'].dt.strftime("%Y-%m-%d")
+    df_display['總資產金額'] = pd.to_numeric(df_display['總資產金額'], errors='coerce').fillna(0).round().astype(int)
+    df_display['每日增額'] = pd.to_numeric(df_display['每日增額'], errors='coerce').fillna(0).round().astype(int)
+    
+    rows_per_page = 10
+    total_rows = len(df_display)
+    
+    if total_rows > 0:
+        total_pages = int(np.ceil(total_rows / rows_per_page))
+        col_page_sel, col_page_info = st.columns([1, 4])
+        with col_page_sel:
+            current_page = st.number_input(f"頁碼 (共 {total_pages} 頁)", min_value=1, max_value=total_pages, value=1, step=1)
+        
+        start_idx = (current_page - 1) * rows_per_page
+        end_idx = start_idx + rows_per_page
+        st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
+    else:
+        st.info("ℹ️ 該時間區間內查無歷史紀錄。")
+
+# ==========================================
+# 功能三：⚙️ 投資標的持股管理 (完整恢復)
+# ==========================================
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
-    # ...[代碼完全保持原樣]...
+    try:
+        df_portfolio = conn.read(worksheet="portfolio_config", ttl=0)
+    except Exception as e:
+        st.error(f"❌ 讀取失敗: {e}")
+        st.stop()
+        
+    df_portfolio = df_portfolio.dropna(subset=["標的名稱"])
+    st.subheader("✏️ 線上編輯持股資訊")
+    edited_df = st.data_editor(df_portfolio, num_rows="dynamic")
+    
+    if st.button("💾 儲存並同步至 Google Sheets"):
+        with st.spinner('正在儲存...'):
+            conn.update(worksheet="portfolio_config", data=edited_df)
+        st.success("💾 修改已同步！")
