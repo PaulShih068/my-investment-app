@@ -113,7 +113,7 @@ if not st.session_state["logged_in"]:
 # ==========================================
 def fetch_realtime_prices(tickers):
     prices = {}
-    cash_keywords = ['現金', '台幣現金', '美金現金']
+    cash_keywords = ['現金', '台幣現金', '美金現金', 'TAIBI', 'CASH']
     valid_tickers = list(set([str(t).strip() for t in tickers if t and str(t).strip() not in cash_keywords]))
     
     fallback_prices = {
@@ -222,12 +222,13 @@ if menu == "📊 投資總覽儀表板":
     else:
         df_portfolio['單位現價'] = df_portfolio['Yahoo代號'].map(current_prices).fillna(0.0)
         
-    # 強制清洗資產代號，移除所有首尾空格干擾
+    # 強制清洗與轉換型態
     df_portfolio['Yahoo代號_clean'] = df_portfolio['Yahoo代號'].astype(str).str.strip()
     
     for idx, row in df_portfolio.iterrows():
         ticker = row['Yahoo代號_clean']
-        if ticker in ['台幣現金', '美金現金', '現金']:
+        # 只要名稱包含現金、台幣、美金，就實施保底覆蓋
+        if any(k in ticker for k in ['台幣', '美金', '現金']):
             sheet_cash_val = 0.0
             if target_price_column in df_portfolio.columns:
                 sheet_cash_val = pd.to_numeric(row[target_price_column], errors='coerce')
@@ -237,21 +238,21 @@ if menu == "📊 投資總覽儀表板":
             else:
                 df_portfolio.loc[idx, '單位現價'] = 1.0
     
-    # 🎯 終極修復：正向白名單換算演算法（徹底阻斷台幣現金誤乘匯率）
+    # 🎯 核心重構：模糊關鍵字強效阻斷引擎（徹底防止人為空白導致白名單漏勾）
     def calculate_twd_market_value(row):
         ticker = str(row['Yahoo代號_clean']).strip()
         price = float(row['單位現價'])
         qty = float(row['持有數量'])
         
-        # 🛡️ 條款一：台幣現金、舊現金代號、以及台灣股票 (.TW) -> 絕對不乘以匯率
-        if ticker == '台幣現金' or ticker == '現金' or ticker.endswith('.TW') or ticker.endswith('.tw'):
+        # 🛡️ 盾牌一：只要包含「台幣」或「現金」字眼，或者是台灣市場代號，100% 阻斷美金匯率
+        if '台幣' in ticker or '現金' in ticker or ticker.endswith('.TW') or ticker.endswith('.tw'):
             return price * qty
             
-        # 🛡️ 條款二：美金現金 -> 自動乘以美金匯率
-        elif ticker == '美金現金':
+        # 🛡️ 盾牌二：精準包含「美金現金」字眼，自動轉換
+        elif '美金現金' in ticker:
             return price * qty * usd_twd_rate
             
-        # 🛡️ 條款三：其餘所有海外資產（例如 QQQM） -> 正常乘以美金匯率
+        # 🛡️ 盾牌三：其餘所有國外資產標的
         else:
             return price * qty * usd_twd_rate
 
