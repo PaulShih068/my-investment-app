@@ -216,29 +216,32 @@ if menu == "📊 投資總覽儀表板":
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(today_date)
     total_loan_balance = l1_remain + l2_remain
     
+    # 欄位對齊名稱
     target_price_column = '個股現價' 
+    
     if st.session_state["is_api_blocked"] and target_price_column in df_portfolio.columns:
         df_portfolio['單位現價'] = pd.to_numeric(df_portfolio[target_price_column], errors='coerce').fillna(0.0)
     else:
         df_portfolio['單位現價'] = df_portfolio['Yahoo代號'].map(current_prices).fillna(0.0)
         
-    # 🎯 安全防護升級：確保轉化為純文字字串，徹底排除浮點數 NaN 引起的 TypeError 崩潰
+    # 安全防護轉型
     df_portfolio['Yahoo代號_clean'] = df_portfolio['Yahoo代號'].fillna('').astype(str).str.strip()
     
+    # 🎯 核心重構點：不論 API 是否阻擋，現金資產一律強制 100% 信任並提取 Google Sheets 內的『個股現價』數值
     for idx, row in df_portfolio.iterrows():
         ticker = row['Yahoo代號_clean']
-        # 確保 ticker 為有效字串後再進行模糊比對
         if any(k in ticker for k in ['台幣', '美金', '現金']):
             sheet_cash_val = 0.0
             if target_price_column in df_portfolio.columns:
                 sheet_cash_val = pd.to_numeric(row[target_price_column], errors='coerce')
             
-            if not np.isnan(sheet_cash_val) and sheet_cash_val > 0:
+            # 只要試算表上有填數字，就百分之百直接覆蓋為單位現價
+            if not np.isnan(sheet_cash_val):
                 df_portfolio.loc[idx, '單位現價'] = sheet_cash_val
             else:
-                df_portfolio.loc[idx, '單位現價'] = 1.0
+                df_portfolio.loc[idx, '單位現價'] = 0.0
     
-    # 模糊關鍵字強效阻斷引擎
+    # 模糊關鍵字強效阻斷與計價引擎
     def calculate_twd_market_value(row):
         ticker = str(row['Yahoo代號_clean']).strip()
         price = float(row['單位現價'])
@@ -247,6 +250,7 @@ if menu == "📊 投資總覽儀表板":
         if '台幣' in ticker or '現金' in ticker or ticker.endswith('.TW') or ticker.endswith('.tw') or ticker == '':
             return price * qty
         elif '美金' in ticker:
+            # 美金現金：依據 Google Sheets 填寫的現價金額，乘以持有數量與美金匯率
             return price * qty * usd_twd_rate
         else:
             return price * qty * usd_twd_rate
@@ -336,9 +340,8 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
-    df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    
-    # 🎯 校正重複與印刷錯誤欄位
+    df_portfolio['currently_market_pct'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
+    df_portfolio['目前投資占比'] = df_portfolio['currently_market_pct']
     df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
     
     def generate_advice(row):
