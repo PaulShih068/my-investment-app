@@ -176,6 +176,7 @@ def fetch_realtime_prices(tickers):
                     df_ticker = data if len(valid_tickers) == 1 else data[clean_yf_ticker]
                     if 'Close' in df_ticker.columns:
                         closes = df_ticker['Close'].dropna()
+                        # 🎯 語法修正點：將原先打錯的 Sea 修正為正確的 Python 邏輯聯結詞 and
                         if not closes.empty and float(closes.iloc[-1]) > 0:
                             prices[ticker] = round(float(closes.iloc[-1]), 2)
                         else:
@@ -210,7 +211,7 @@ def get_usd_twd_rate():
         data = yf.download("USDTWD=X", period='5d', progress=False)
         if not data.empty and 'Close' in data.columns:
             closes = data['Close'].dropna()
-            if not closes.empty Sea float(closes.iloc[-1]) > 0:
+            if not closes.empty and float(closes.iloc[-1]) > 0:
                 return round(float(closes.iloc[-1]), 4)
         return 32.5
     except Exception:
@@ -223,15 +224,15 @@ def execute_system_wide_sync(custom_connection=None):
     try:
         active_conn = custom_connection if custom_connection else conn
         
-        # 1. 讀取最新雲端配置 (強制作廢快取讀取即時狀態)
+        # 1. 讀取最新雲端配置
         df_history_sync = active_conn.read(worksheet="daily_asset_history", ttl=0)
         df_portfolio_sync = active_conn.read(worksheet="portfolio_config", ttl=0)
         
         df_history_sync = df_history_sync.dropna(subset=["日期"])
         df_portfolio_sync = df_portfolio_sync.dropna(subset=["標的名稱"])
         
-        # 🎯 核心修復防線：將歷史資料庫中的日期欄位全數轉換成標準字串 (YYYY-MM-DD)
-        df_history_sync['日期'] = pd.to_datetime(df_history_sync['日期']).dt.strftime("%Y-%m-%d")
+        # 數據清理：確保日期欄位全數轉換成標準字串 (YYYY-MM-DD)
+        df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['日期']).dt.strftime("%Y-%m-%d")
         
         # 2. 獲取報價與匯率並進行清算
         prices_map = fetch_realtime_prices(df_portfolio_sync['Yahoo代號'].tolist())
@@ -271,7 +272,6 @@ def execute_system_wide_sync(custom_connection=None):
         # 3. 根據當天日期判定執行「產生新資料列」或「精準就地更新」
         today_str = datetime.now().strftime("%Y-%m-%d")
         
-        # 計算相對於昨天的增額
         df_history_sorted = df_history_sync.copy()
         df_history_sorted['日期'] = pd.to_datetime(df_history_sorted['日期'])
         df_history_sorted = df_history_sorted.sort_values(by="日期")
@@ -281,14 +281,12 @@ def execute_system_wide_sync(custom_connection=None):
         daily_diff = total_mv_calculated - float(df_yesterday['總資產金額'].iloc[-1]) if not df_yesterday.empty else 0.0
         daily_roi = round((total_mv_calculated - total_cost_calculated) / total_cost_calculated, 4) if total_cost_calculated > 0 else 0.0
         
-        # 🎯 核心日期分流邏輯
-        if today_str in df_history_sync['日期'].values:
-            # ✅ 當天紀錄已存在 ➜ 精準就地更新，絕對不增加新行或覆蓋別人
-            df_history_sync.loc[df_history_sync['日期'] == today_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
+        # 核心日期分流邏輯 (強韌 Upsert 歷史對齊)
+        if today_str in df_history_sync['開時日期'].values:
+            df_history_sync.loc[df_history_sync['開時日期'] == today_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
                 int(round(total_mv_calculated)), int(round(daily_diff)), float(daily_roi)
             ]
         else:
-            # ✅ 當天紀錄不存在 ➜ 根據當天日期產生一筆全新的歷史數據追加於末端
             new_row_data = {
                 "日期": today_str,
                 "總資產金額": int(round(total_mv_calculated)),
@@ -297,6 +295,9 @@ def execute_system_wide_sync(custom_connection=None):
             }
             df_history_sync = pd.concat([df_history_sync, pd.DataFrame([new_row_data])], ignore_index=True)
             
+        if '開時日期' in df_history_sync.columns:
+            df_history_sync = df_history_sync.drop(columns=['開時日期'])
+
         # 4. 多維度公式智慧還原再注入防禦網
         final_upload_df = df_portfolio_sync.copy()
         final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
@@ -511,13 +512,10 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_pct'] if 'currently_market_pct' in df_portfolio.columns else (df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重'])
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_pct'] if 'currently_market_pct' in df_portfolio.columns else (df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重'])
     
     if '偏離度 (Diff)' not in df_portfolio.columns or df_portfolio['偏離度 (Diff)'].isna().all():
         df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
-        
-    if '偏離度 (Diff)' not in df_portfolio.columns or df_portfolio['偏離度 (Diff)'].isna().all():
-        df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
 
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
