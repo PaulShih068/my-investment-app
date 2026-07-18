@@ -485,8 +485,11 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_pct'] if 'currently_market_pct' in df_portfolio.columns else (df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重'])
     
+    if '偏離度 (Diff)' not in df_portfolio.columns or df_portfolio['偏離度 (Diff)'].isna().all():
+        df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
             return f"⚠️ 建議減碼 {row['標的名稱']}"
@@ -558,7 +561,6 @@ elif menu == "✍️ 每日資產動態輸入":
                 st.cache_data.clear()
                 
         st.markdown("---")
-        st.sidebar.markdown("---")
         st.subheader("📋 歷史資產紀錄查詢與管理")
         
         search_option = st.radio(
@@ -600,12 +602,11 @@ elif menu == "✍️ 每日資產動態輸入":
             st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
 
 # ==========================================
-# 功能三：⚙️ 投資標的持股管理 (🎯 終極防禦：公式動態還原重組技術)
+# 功能三：⚙️ 投資標的持股管理 (🎯 已修正 float64 資料型態死結)
 # ==========================================
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
     
-    # 使用官方最穩健的 read 載入資料
     try:
         df_portfolio_raw = conn.read(worksheet="portfolio_config", ttl=0)
     except Exception as e:
@@ -617,43 +618,42 @@ elif menu == "⚙️ 投資標的持股管理":
     st.subheader("✏️ 線上編輯持股資訊")
     st.info("💡 智慧公式保護網已部署：您可以自由修改標的、權重、數量與成本。當您點擊儲存時，系統將全自動利用『公式還原引擎』將個股現價重新編譯為 GOOGLEFINANCE 公式字串寫回雲端，絕對不破壞試算表的動態股價更新！")
     
-    # 呈現完整資料表格供使用者修改
     edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_safe_editor")
     
     if st.button("💾 儲存並同步至 Google Sheets"):
         with st.spinner('正在重新編譯並還原 Google 試算表公式...'):
             try:
-                # 建立全新的 DataFrame 副本準備上傳
+                # 建立上傳副本
                 final_upload_df = edited_df.copy()
                 
-                # 🎯 核心還原演算法：走訪每一列，依照 Yahoo 代號重組對應的 GOOGLEFINANCE 公式字串
+                # 🎯 終極修正核心：將『個股現價』直欄的型態強行解鎖為字串（str / object）
+                # 這樣一來，Pandas 就不會判定它只能裝 float64 數字，字串公式就能完美注入！
+                final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
+                
+                # 走訪每一列，依照 Yahoo 代號重組對應的 GOOGLEFINANCE 公式字串
                 for idx, row in final_upload_df.iterrows():
                     ticker = str(row.get('Yahoo代號', '')).strip()
                     name = str(row.get('標的名稱', '')).strip()
                     
-                    # 如果是現金項目，不填公式，維持其原本輸入的數值 (或維持 1.0)
-                    if any(k in ticker for k in ['台幣', '美金', '現金']) or any(k in name for k in ['台幣', '美金', '現金']) or ticker == '':
+                    if any(k in ticker for k in ['台幣', '美金', '現金']) or any(k in name for k in ['台幣', '美金', '現金']) or ticker == '' or ticker.lower() == 'nan':
                         continue
                     else:
-                        # 如果是台灣市場股票標的 (例如 00631L.TW)
                         if ticker.upper().endswith('.TW'):
                             stock_code = ticker.split('.')[0]
-                            # 轉換成 Google Sheets 格式 ➜ "=GOOGLEFINANCE(\"TPE:00631L\")"
                             formula_str = f'=GOOGLEFINANCE("TPE:{stock_code}")'
                         else:
-                            # 美股標的 (例如 QQQM) ➜ "=GOOGLEFINANCE(\"QQQM\")"
                             formula_str = f'=GOOGLEFINANCE("{ticker}")'
                         
-                        # 核心覆蓋：將原先在畫面上被修改成死數字的儲存格，重新注入公式字串！
+                        # 成功注入公式字串，不再引發 dtype 衝突報錯
                         final_upload_df.at[idx, '個股現價'] = formula_str
                 
-                # 移除其餘網頁前端自產的輔助計算唯讀欄位
+                # 移除網頁前端唯讀的輔助計算欄位
                 final_upload_df = final_upload_df.drop(
                     columns=['單位現價', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議', 'Yahoo代號_clean', '標的名稱_clean'], 
                     errors='ignore'
                 )
                 
-                # 🚀 呼叫 Streamlit 官方最穩健、絕對不報錯的 update 語法
+                # 🚀 呼叫官方標準 update 機制完成無損覆蓋
                 conn.update(worksheet="portfolio_config", data=final_upload_df)
                 
                 st.success("🎉 公式防禦任務大成功！持股變更已寫入，且雲端公式已全自動補回再激活！")
