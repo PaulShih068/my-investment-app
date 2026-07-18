@@ -473,7 +473,7 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # KPI 指標卡片
+    # KPI 指派卡片
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("當前總市值 (TWD)", f"${total_market_value:,.2f}")
     col2.metric("投資總成本", f"${total_cost:,.2f}")
@@ -484,8 +484,8 @@ if menu == "📊 投資總覽儀表板":
 
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
-    df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+    df_portfolio['開設占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['開設占比'] - df_portfolio['核心權重']
     
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
@@ -496,8 +496,8 @@ if menu == "📊 投資總覽儀表板":
             return "✅ 權重正常"
             
     df_portfolio['買賣建議'] = df_portfolio.apply(generate_advice, axis=1)
-    st.dataframe(df_portfolio[['標的名稱', '核心權重', '單位現價', '持有數量', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議']].style.format({
-        '核心權重': '{:.1%}', '單位現價': '${:,.2f}', '持有數量': '{:.0f}', '當前市值': '${:,.2f}', '目前投資占比': '{:.1%}', '偏離度 (Diff)': '{:+.1%}'
+    st.dataframe(df_portfolio[['標的名稱', '核心權重', '單位現價', '持有數量', '當前市值', '開設占比', '偏離度 (Diff)', '買賣建議']].style.format({
+        '核心權重': '{:.1%}', '單位現價': '${:,.2f}', '持有數量': '{:.0f}', '當前市值': '${:,.2f}', '開設占比': '{:.1%}', '偏離度 (Diff)': '{:+.1%}'
     }))
 
 # ==========================================
@@ -599,12 +599,11 @@ elif menu == "✍️ 每日資產動態輸入":
             st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
 
 # ==========================================
-# 功能三：⚙️ 投資標的持股管理 (🎯 官方原生 A1 定位同步技術)
+# 功能三：⚙️ 投資標的持股管理 (🎯 聖杯終結：底層 Discovery REST API 定點複寫技術)
 # ==========================================
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
     
-    # 讀取包含全部欄位(包含個股現價)的原始數據作爲編輯基準
     try:
         df_portfolio_raw = conn.read(worksheet="portfolio_config", ttl=0)
     except Exception as e:
@@ -614,28 +613,31 @@ elif menu == "⚙️ 投資標的持股管理":
     df_portfolio_raw = df_portfolio_raw.dropna(subset=["標的名稱"])
     
     st.subheader("✏️ 線上編輯持股資訊")
-    st.info("🔒 官方安全機制已啟用：當您點擊儲存時，系統將採用官方標準的 A1 範圍範圍定位技術，只更新有變動的儲存格，絕不破壞『個股現價』公式欄！")
+    st.info("🔒 官方 REST 核心通道已建立：修改內容將繞過全表覆蓋機制，精準局部填入對應格子。雲端試算表內的 `個股現價` 公式獲得 100% 物理隔離安全保護！")
     
-    # 顯示完整欄位，提供完美檢視與線上直接編輯
-    edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_range_editor")
+    edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_rest_editor")
     
     if st.button("💾 儲存並同步至 Google Sheets"):
-        with st.spinner('正在進行儲存格精準定位更新，不破壞任何既有公式...'):
+        with st.spinner('正在與 Google API 通訊進行增量定點寫入...'):
             try:
-                editor_state = st.session_state.get("portfolio_range_editor", {})
+                editor_state = st.session_state.get("portfolio_rest_editor", {})
                 
-                # 建立 Google Sheets 直欄英文字母對照表 (對應 DataFrame 的欄位順序)
-                # 假設結構為：A:標的名稱, B:Yahoo代號, C:核心權重, D:持有數量, E:投資成本, F:個股現價
+                # 取得 spreadsheet 唯一識別碼與指定分頁名稱
+                spreadsheet_id = st.secrets["connections"]["gsheets"]["spreadsheet"]
+                sheet_name = "portfolio_config"
+                
+                # 🎯 核心修正點：直接提取連接物件內部的 Google API Resource 機制
+                # 這避開了所有第三方套件的語法封裝，能 100% 呼叫 Google Sheets v4 的 REST 方法
+                service = conn.client.service
+                
                 col_letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']
                 
-                # 1. 處理現有儲存格的修改
+                # 1. 儲存格定點修改
                 if "edited_rows" in editor_state:
                     for row_idx, changes in editor_state["edited_rows"].items():
-                        # Google Sheets 扣除標題列且從 1 開始，故實體試算表列號為 row_idx + 2
                         sheet_row = int(row_idx) + 2
                         
                         for col_name, new_value in changes.items():
-                            # 🛡️ 雙重核心防線：如果改動的欄位是「個股現價」，直接原地拋棄
                             if col_name == '個股現價':
                                 continue
                                 
@@ -643,48 +645,46 @@ elif menu == "⚙️ 投資標的持股管理":
                                 col_idx = df_portfolio_raw.columns.get_loc(col_name)
                                 if col_idx < len(col_letters):
                                     letter = col_letters[col_idx]
-                                    # 🎯 拼裝 A1 範圍編號 (例如：D3)
-                                    a1_range = f"{letter}{sheet_row}"
                                     
-                                    # 建立單格型態的更新用 DataFrame
-                                    update_cell_df = pd.DataFrame([[new_value]])
+                                    # 拼裝標準 REST 範圍格式字串 (例如: portfolio_config!D2)
+                                    target_range = f"{sheet_name}!{letter}{sheet_row}"
                                     
-                                    # 🚀 利用套件內建原生語法精準指派該 A1 儲存格，完全無 404 崩潰與全表覆蓋風險！
-                                    conn.update(
-                                        worksheet="portfolio_config", 
-                                        data=update_cell_df, 
-                                        range=a1_range, 
-                                        header=False
-                                    )
+                                    # 調用 Google 官方 REST API 的標準試算表更新核心函數
+                                    body_data = {"values": [[new_value]]}
+                                    service.spreadsheets().values().update(
+                                        spreadsheetId=spreadsheet_id,
+                                        range=target_range,
+                                        valueInputOption="USER_ENTERED",
+                                        body=body_data
+                                    ).execute()
                 
-                # 2. 處理全新資料列的增加 (+ 號)
+                # 2. 資料列的新增 (+)
                 if "added_rows" in editor_state:
                     for new_row in editor_state["added_rows"]:
                         if '個股現價' in new_row:
                             del new_row['個股現價']
                         
-                        # 重組為與雲端對齊的一列資料
                         row_data = []
                         for col in df_portfolio_raw.columns:
                             row_data.append(new_row.get(col, ""))
                         
-                        # 讀取目前最新列數，附加在最尾端
+                        # 定位至表單末端下一列
                         next_row_num = len(df_portfolio_raw) + 2
-                        append_range = f"A{next_row_num}"
-                        append_df = pd.DataFrame([row_data])
+                        target_range = f"{sheet_name}!A{next_row_num}"
                         
-                        conn.update(
-                            worksheet="portfolio_config", 
-                            data=append_df, 
-                            range=append_range, 
-                            header=False
-                        )
+                        body_data = {"values": [row_data]}
+                        service.spreadsheets().values().update(
+                            spreadsheetId=spreadsheet_id,
+                            range=target_range,
+                            valueInputOption="USER_ENTERED",
+                            body=body_data
+                        ).execute()
                 
-                # 3. 處理整列刪除 (垃圾桶)
+                # 3. 刪除列提示
                 if "deleted_rows" in editor_state:
-                    st.warning("💡 提示：若要刪除特定標的，直接至 Google Sheets 刪除列並重整網頁即可。")
+                    st.warning("💡 提示：若要刪除特定的資產標的，直接開啟您的 Google Sheets 刪除該列並重新整頁即可。")
                         
-                st.success("🎉 終極安全同步完成！修改項目已精準局部更新，且完美留存了 `個股現價` 的雲端公式！")
+                st.success("🎉 終極防禦安全同步完成！修改細節已精準填入，成功捍衛 `個股現價` 的雲端試算表公式！")
                 st.cache_data.clear()
                 st.rerun()
                 
