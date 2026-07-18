@@ -224,33 +224,40 @@ if menu == "📊 投資總覽儀表板":
     else:
         df_portfolio['單位現價'] = df_portfolio['Yahoo代號'].map(current_prices).fillna(0.0)
         
-    # 安全防護轉型
+    # 安全防護轉型與數據清洗
     df_portfolio['Yahoo代號_clean'] = df_portfolio['Yahoo代號'].fillna('').astype(str).str.strip()
+    df_portfolio['標的名稱_clean'] = df_portfolio['標的名稱'].fillna('').astype(str).str.strip()
     
-    # 🎯 核心重構點：不論 API 是否阻擋，現金資產一律強制 100% 信任並提取 Google Sheets 內的『個股現價』數值
+    # 🎯 核心重構點：升級為「標的名稱 + Yahoo代號」雙軌聯防攔截引擎
     for idx, row in df_portfolio.iterrows():
         ticker = row['Yahoo代號_clean']
-        if any(k in ticker for k in ['台幣', '美金', '現金']):
+        name = row['標的名稱_clean']
+        
+        # 只要 代號 或 名稱 內含有「台幣」、「美金」、「現金」關鍵字，100% 進行覆蓋
+        if any(k in ticker for k in ['台幣', '美金', '現金']) or any(k in name for k in ['台幣', '美金', '現金']):
             sheet_cash_val = 0.0
             if target_price_column in df_portfolio.columns:
                 sheet_cash_val = pd.to_numeric(row[target_price_column], errors='coerce')
             
-            # 只要試算表上有填數字，就百分之百直接覆蓋為單位現價
-            if not np.isnan(sheet_cash_val):
+            # 直接將試算表上的金額寫入單位現價
+            if not np.isnan(sheet_cash_val) and sheet_cash_val > 0:
                 df_portfolio.loc[idx, '單位現價'] = sheet_cash_val
             else:
-                df_portfolio.loc[idx, '單位現價'] = 0.0
+                # 終極防線：若試算表未正確讀到或為0，給予保底現價 1.0 防止畫面空白
+                df_portfolio.loc[idx, '單位現價'] = 1.0
     
-    # 模糊關鍵字強效阻斷與計價引擎
+    # 模糊關鍵字計價引擎
     def calculate_twd_market_value(row):
         ticker = str(row['Yahoo代號_clean']).strip()
+        name = str(row['標的名稱_clean']).strip()
         price = float(row['單位現價'])
         qty = float(row['持有數量'])
         
-        if '台幣' in ticker or '現金' in ticker or ticker.endswith('.TW') or ticker.endswith('.tw') or ticker == '':
+        # 如果包含「台幣」或「現金」或屬於台股 -> 直接相乘
+        if '台幣' in ticker or '現金' in ticker or '台幣' in name or '現金' in name or ticker.endswith('.TW') or ticker.endswith('.tw') or ticker == '':
             return price * qty
-        elif '美金' in ticker:
-            # 美金現金：依據 Google Sheets 填寫的現價金額，乘以持有數量與美金匯率
+        # 如果包含「美金」-> 乘以數量與匯率
+        elif '美金' in ticker or '美金' in name:
             return price * qty * usd_twd_rate
         else:
             return price * qty * usd_twd_rate
