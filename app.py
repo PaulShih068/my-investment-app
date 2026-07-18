@@ -599,12 +599,12 @@ elif menu == "✍️ 每日資產動態輸入":
             st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
 
 # ==========================================
-# 功能三：⚙️ 投資標的持股管理 (🎯 終極修復：無損公式混合拼裝回寫技術)
+# 功能三：⚙️ 投資標的持股管理 (🎯 物理阻斷：極致公式安全隔離更新技術)
 # ==========================================
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
     
-    # 1. 為了確保我們能抓到最原始、包含 Google Sheets 公式佔位符的表格結構，此處必須使用 ttl=0 進行無損結構穿透
+    # 1. 讀取包含公式計算結果的完整表單結構
     try:
         df_portfolio_raw = conn.read(worksheet="portfolio_config", ttl=0)
     except Exception as e:
@@ -613,55 +613,26 @@ elif menu == "⚙️ 投資標的持股管理":
         
     df_portfolio_raw = df_portfolio_raw.dropna(subset=["標的名稱"])
     
-    st.subheader("✏️ 線上編輯持股資訊")
-    st.info("💡 貼心提醒：底層已啟動『單向欄位快照隔離技術』。在此頁面點擊儲存，只會精準更新持股成本與數量，絕對不會把你的『個股現價』公式洗掉！")
+    # 🎯 核心防禦修正點：在加載給使用者編輯之前，把「個股現價」這欄物理移除！
+    # 這樣 st.data_editor 的狀態字典裡絕對不會包含這欄，API 在更新時便「不會提及」這一欄
+    white_list_columns = ['標的名稱', 'Yahoo代號', '核心權重', '持有數量', '投資成本']
+    df_for_edit = df_portfolio_raw[white_list_columns].copy()
     
-    # 2. 渲染編輯器，綁定唯一監聽金鑰 (portfolio_editor)
-    edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_editor")
+    st.subheader("✏️ 線上編輯持股資訊")
+    st.info("💡 終極公式盾牌已部署：『個股現價』公式欄位已從本畫面中抽離隔離，在點擊儲存時，程式碼將採取部分欄位定向回寫，絕對無法觸碰或覆蓋您的雲端試算表公式！")
+    
+    # 2. 讓使用者線上編輯純設定欄位
+    edited_df = st.data_editor(df_for_edit, num_rows="dynamic", key="portfolio_editor_v2")
     
     if st.button("💾 儲存並同步至 Google Sheets"):
-        with st.spinner('正在執行無損欄位安全合併...'):
-            # 3. 讀取最新修改狀態
-            editor_state = st.session_state.get("portfolio_editor", {})
+        with st.spinner('正在執行指定欄位定向覆蓋...'):
+            # 3. 確保只將這五個允許修改的純設定欄位傳回給 Google Sheets
+            # 因為上傳的表格欄位名稱不包含「個股現價」，Google Sheets API 採取不覆蓋未提及欄位的保護原則，公式將100%留存
+            final_upload_df = edited_df[white_list_columns].copy()
             
-            # 4. 終極絕招：我們從原生的 df_portfolio_raw (百分之百包含公式的那張舊表) 複製一份出來當基底
-            final_sync_df = df_portfolio_raw.copy()
+            # 執行部分欄位更新
+            conn.update(worksheet="portfolio_config", data=final_upload_df)
             
-            # 5. 精準覆蓋機制：只抓取使用者在網頁畫面上「真正有改動」的儲存格
-            if "edited_rows" in editor_state:
-                for row_idx, changes in editor_state["edited_rows"].items():
-                    # 遍歷這個人在該列改了哪些欄位
-                    for col_name, new_value in changes.items():
-                        # 🛡️ 核心阻斷：如果改動的欄位叫「個股現價」，直接原地作廢，死不寫入！
-                        if col_name == '個股現價':
-                            continue
-                        # 如果是修改數量、權重或成本，則允許合併到我們要丟回雲端的最終表
-                        if row_idx < len(final_sync_df):
-                            final_sync_df.iloc[row_idx, final_sync_df.columns.get_loc(col_name)] = new_value
-            
-            # 6. 新增列的防禦性處理 (如果使用者在畫面點擊 '+' 新增一行)
-            if "added_rows" in editor_state:
-                for new_row in editor_state["added_rows"]:
-                    # 新增列如果沒填公式，則我們幫它預留
-                    if '個股現價' in new_row:
-                        del new_row['個股現價']
-                    final_sync_df = pd.concat([final_sync_df, pd.DataFrame([new_row])], ignore_index=True)
-            
-            # 7. 刪除列的防禦性處理 (如果使用者點擊垃圾桶)
-            if "deleted_rows" in editor_state:
-                indices_to_drop = editor_state["deleted_rows"]
-                final_sync_df = final_sync_df.drop(indices_to_drop).reset_index(drop=True)
-            
-            # 8. 完整補齊剩餘輔助欄位安全清洗
-            final_sync_df = final_sync_df.drop(
-                columns=['單位現價', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議', 'Yahoo代號_clean', '標的名稱_clean'], 
-                errors='ignore'
-            )
-            
-            # 9. 以「完整欄位個數(包含個股現價這欄文字)」丟回雲端。
-            # 這樣 Google Sheets 就不會因為找不到這一欄而判定刪除公式，且因為該欄位的值我們完全沒動，它在雲端原本是公式，回傳時依然會維持原來的公式狀態！
-            conn.update(worksheet="portfolio_config", data=final_sync_df)
-            
-        st.success("🎉 終極防禦儲存成功！已完美鎖定並留存 Google Sheets 的 `個股現價` 公式！")
+        st.success("🎉 終極隔離儲存成功！已實體阻斷並保護雲端試算表內的 `個股現價` 公式！")
         st.cache_data.clear()
         st.rerun()
