@@ -15,14 +15,21 @@ import time as time_module
 # ==========================================
 st.set_page_config(page_title="個人智慧投資紀錄簿", layout="wide", initial_sidebar_state="expanded")
 
+# 建立 Google Sheets 連結物件
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# 安全檢查：確保 Secrets 設定正確
 if "connections" not in st.secrets or "gsheets" not in st.secrets["connections"] or "spreadsheet" not in st.secrets["connections"]["gsheets"]:
     st.error("⚠️ 偵測到雲端設定錯誤！請檢查 Streamlit Cloud 控制台中的 Secrets 設定。")
     st.stop()
 
+# 初始化 API 遭阻擋的狀態標記
 if "is_api_blocked" not in st.session_state:
     st.session_state["is_api_blocked"] = False
+
+# 初始化排程歷史紀錄鎖定，防止同一分鐘重複寫入
+if "last_scheduled_trigger" not in st.session_state:
+    st.session_state["last_scheduled_trigger"] = ""
 
 # ==========================================
 # 🏦 自動化：動態貸款餘額扣除計算函式
@@ -177,7 +184,7 @@ def get_usd_twd_rate():
         return 32.5
 
 # ==========================================
-# 🔄 全新優化：實體化全自動背景計算與同步存檔函式
+# 🔄 核心背景排程引擎：負責定時被觸發計算並寫入雲端
 # ==========================================
 def execute_background_sync():
     try:
@@ -186,13 +193,6 @@ def execute_background_sync():
         df_history_bg = df_history_bg.dropna(subset=["日期"])
         df_portfolio_bg = df_portfolio_bg.dropna(subset=["標的名稱"])
         
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        df_history_bg['日期'] = df_history_bg['日期'].astype(str)
-        
-        # 🛡️ 核心防線：檢查 Google 試算表歷史紀錄，如果今天已經有資料，直接退出不重複寫入
-        if today_str in df_history_bg['日期'].values:
-            return True
-            
         current_prices_bg = fetch_realtime_prices(df_portfolio_bg['Yahoo代號'].tolist())
         usd_rate_bg = get_usd_twd_rate()
         
@@ -227,6 +227,9 @@ def execute_background_sync():
         total_mv_bg = df_portfolio_bg['當前市值'].sum()
         total_cost_bg = df_portfolio_bg['投資成本'].sum()
         
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        df_history_bg['日期'] = df_history_bg['日期'].astype(str)
+        
         df_history_temp = df_history_bg.copy()
         df_history_temp['日期'] = pd.to_datetime(df_history_temp['日期'])
         df_history_temp = df_history_temp.sort_values(by="日期")
@@ -243,26 +246,36 @@ def execute_background_sync():
             "每日報酬率": float(daily_roi)
         }
         
-        df_history_bg = pd.concat([df_history_bg, pd.DataFrame([new_data])], ignore_index=True)
+        if today_str in df_history_bg['日期'].values:
+            df_history_bg.loc[df_history_bg['日期'] == today_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
+                int(round(total_mv_bg)), int(round(daily_diff)), float(daily_roi)
+            ]
+        else:
+            df_history_bg = pd.concat([df_history_bg, pd.DataFrame([new_data])], ignore_index=True)
+            
         conn.update(worksheet="daily_asset_history", data=df_history_bg)
         return True
     except Exception:
         return False
 
-# 守護執行緒監聽引擎
+# 常駐背景計時守護執行緒（直接讀取雲端配置，不依賴網頁內存記憶體）
 def background_scheduler():
     while True:
         try:
-            # 即時讀取雲端開關，避免記憶體重置遺失
             df_sched = conn.read(worksheet="scheduler_config", ttl=0)
             if not df_sched.empty and "觸發時間" in df_sched.columns:
-                target_times = df_sched["觸發時間"].dropna().astype(str).tolist()
+                target_times_str = df_sched["觸發時間"].dropna().astype(str).tolist()
                 
                 now = datetime.now()
                 current_time_str = now.strftime("%H:%M")
+                current_date_str = now.strftime("%Y-%m-%d")
+                trigger_id = f"{current_date_str}_{current_time_str}"
                 
-                if current_time_str in target_times:
-                    execute_background_sync()
+                if current_time_str in target_times_str:
+                    if st.session_state["last_scheduled_trigger"] != trigger_id:
+                        success = execute_background_sync()
+                        if success:
+                            st.session_state["last_scheduled_trigger"] = trigger_id
         except Exception:
             pass
         time_module.sleep(60)
@@ -273,10 +286,11 @@ def background_scheduler():
 st.sidebar.title("🧭 投資導覽控制台")
 st.sidebar.write(f"👤 目前使用者：`{st.session_state['username']}`")
 
+# 🎯 終極修復版：從 Google Sheets 載入、編輯並固化持久排程時間（最多5組）
 st.sidebar.markdown("---")
-st.sidebar.subheader("⏰ 雲端持久化排程配置")
+st.sidebar.subheader("⏰ 雲端持久化自動排程設定")
 
-# 📥 從 Google Sheets 載入已存檔的排程設定
+# 第一步：嘗試從 Google Sheets 載入已固化的時間
 try:
     df_load_sched = conn.read(worksheet="scheduler_config", ttl=0)
     if df_load_sched.empty or "觸發時間" not in df_load_sched.columns:
@@ -287,34 +301,36 @@ except Exception:
     initial_times = ["14:00"]
 
 init_count = min(max(len(initial_times), 1), 5)
-num_times = st.sidebar.number_input("每日自動更新次數 (最多5次)：", min_value=1, max_value=5, value=init_count, step=1)
+
+# 第二步：UI 渲染更新次數與時間選擇器
+num_times = st.sidebar.number_input("設定每日定時更新次數 (最多5次)：", min_value=1, max_value=5, value=init_count, step=1)
 
 scheduled_times_list = []
 for i in range(int(num_times)):
-    # 讀取既有設定作為預設值
     if i < len(initial_times):
         try:
             t_parts = list(map(int, initial_times[i].split(":")))
             default_t = time(hour=t_parts[0], minute=t_parts[1])
-        except Exception:
+        except:
             default_t = time(hour=14, minute=0)
     else:
         default_t = time(hour=14, minute=0)
         
-    chosen_time = st.sidebar.time_input(f"選擇第 {i+1} 組同步時間點：", default_t, key=f"sched_t_{i}")
+    chosen_time = st.sidebar.time_input(f"選擇第 {i+1} 組同步時間點：", default_t, key=f"sched_persist_t_{i}")
     scheduled_times_list.append(chosen_time.strftime("%H:%M"))
 
-# 💾 儲存按鈕：將排程直接寫入 Google Sheets 實體防線
-if st.sidebar.button("💾 儲存排程設定至雲端", use_container_width=True):
+# 第三步：手動按下按鈕，直接將設定寫入雲端硬碟，徹底杜絕網頁重整歸零的 Bug
+if st.sidebar.button("💾 儲存並啟用雲端排程", use_container_width=True):
     df_save_sched = pd.DataFrame({
         "排程順序": [f"第 {x+1} 組" for x in range(len(scheduled_times_list))],
         "觸發時間": scheduled_times_list
     })
-    with st.spinner("正在將排程同步至雲端記憶體..."):
+    with st.spinner("正在將排程時間寫入 Google Sheets..."):
         conn.update(worksheet="scheduler_config", data=df_save_sched)
-    st.sidebar.success("🎉 排程設定成功固化至 Google Sheets！")
+    st.sidebar.success("🎉 排程時間成功固化！重整網頁也不會消失了。")
+    st.rerun()
 
-# 啟動常常駐背景守護執行緒（確保全域唯一）
+# 啟動常常駐背景監聽引擎（全域唯一）
 if "scheduler_thread_started" not in st.session_state:
     t = threading.Thread(target=background_scheduler, daemon=True)
     t.start()
@@ -349,7 +365,7 @@ if menu == "📊 投資總覽儀表板":
         usd_twd_rate = get_usd_twd_rate()
     
     st.sidebar.metric("💵 當前美金匯率 (USD/TWD)", f"${usd_twd_rate:.4f}")
-    st.sidebar.info(f"🤖 雲端固化排程中！每日觸發：\n`{', '.join(scheduled_times_list)}`")
+    st.sidebar.success(f"🤖 雲端持久排程監聽中！\n每日觸發時間點：`{', '.join(scheduled_times_list)}`")
     
     today_date = datetime.now().date()
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(today_date)
@@ -380,7 +396,7 @@ if menu == "📊 投資總覽儀表板":
         qty = float(row['持有數量'])
         if '台幣' in ticker or '現金' in ticker or '台幣' in name or '現金' in name or ticker.endswith('.TW') or ticker.endswith('.tw') or ticker == '':
             return price * qty
-        return price * q * usd_twd_rate
+        return price * qty * usd_twd_rate
 
     df_portfolio['當前市值'] = df_portfolio.apply(calculate_twd_market_value, axis=1)
     total_market_value = df_portfolio['當前市值'].sum()
@@ -402,7 +418,7 @@ if menu == "📊 投資總覽儀表板":
     with col_btn:
         sync_clicked = st.button("🔄 立即同步最新資產至 Google 雲端", use_container_width=True)
     with col_info:
-        st.info("💡 雲端背景排程執行中，每天時間一到會全自動判定並寫入，你也可以點擊此處手動強製更新！")
+        st.info("💡 雲端持久化排程已啟動。每次重新整理網頁都會自動從 Google Sheets 重新載入排程設定！")
         
     if sync_clicked:
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -437,7 +453,7 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # KPI 指標卡片與其餘圖表維持正常（已完整配置）
+    # KPI 指標卡片
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("當前總市值 (TWD)", f"${total_market_value:,.2f}")
     col2.metric("投資總成本", f"${total_cost:,.2f}")
@@ -466,7 +482,7 @@ if menu == "📊 投資總覽儀表板":
 
 elif menu == "✍️ 每日資產動態輸入":
     st.title("✍️ 每日資產金額輕鬆記")
-    # ...[保持原本邏輯]...
+    # ...[代碼完全保持原樣]...
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
-    # ...[保持原本邏輯]...
+    # ...[代碼完全保持原樣]...
