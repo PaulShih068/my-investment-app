@@ -15,31 +15,22 @@ import time as time_module
 # ==========================================
 st.set_page_config(page_title="個人智慧投資紀錄簿", layout="wide", initial_sidebar_state="expanded")
 
-# 🎯 核心 RWD 注入：強制手機瀏覽時優化字體、卡片排版與表格容器
 st.markdown("""
 <style>
-    /* 手機與行動裝置 RWD 樣式微調 (螢幕寬度小於 768px) */
     @media (max-width: 768px) {
-        /* 調小主標題與副標題字級，避免中文字體在手機端斷行 */
         .main h1 { font-size: 1.8rem !important; }
         .main h2 { font-size: 1.4rem !important; }
         .main h3 { font-size: 1.1rem !important; }
-        
-        /* 強制 Streamlit 原生卡片與欄位排版在手機上改為垂直單欄排列 */
         [data-testid="stHorizontalBlock"] {
             flex-direction: column !important;
             gap: 10px !important;
         }
-        
-        /* 縮小 Dataframe 表格元件內的文字，方便單一螢幕裝下更多欄位 */
         div[data-testid="stDataFrame"] table {
             font-size: 12px !important;
         }
         div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th {
             padding: 4px 6px !important;
         }
-        
-        /* 讓手機端的提示資訊區塊與 KPI 卡片邊距變窄，釋放橫向空間 */
         .stAlert { padding: 10px !important; }
     }
 </style>
@@ -48,16 +39,14 @@ st.markdown("""
 # 建立 Google Sheets 連結物件
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 安全檢查：確保 Secrets 設定正確
+# 安全檢查
 if "connections" not in st.secrets or "gsheets" not in st.secrets["connections"] or "spreadsheet" not in st.secrets["connections"]["gsheets"]:
     st.error("⚠️ 偵測到雲端設定錯誤！請檢查 Streamlit Cloud 控制台中的 Secrets 設定。")
     st.stop()
 
-# 初始化 API 遭阻擋的狀態標記
 if "is_api_blocked" not in st.session_state:
     st.session_state["is_api_blocked"] = False
 
-# 初始化排程歷史紀錄鎖定，防止同一分鐘重複寫入
 if "last_scheduled_trigger" not in st.session_state:
     st.session_state["last_scheduled_trigger"] = ""
 
@@ -484,7 +473,7 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # KPI 指標卡片（在手機上會自動摺疊向下排列）
+    # KPI 指標卡片
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("當前總市值 (TWD)", f"${total_market_value:,.2f}")
     col2.metric("投資總成本", f"${total_cost:,.2f}")
@@ -496,8 +485,11 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_pct'] if 'currently_market_pct' in df_portfolio.columns else (df_portfolio['目前投資占比'] - df_portfolio['核心權重'])
     
+    if '偏離度 (Diff)' not in df_portfolio.columns:
+        df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
             return f"⚠️ 建議減碼 {row['標的名稱']}"
@@ -610,7 +602,7 @@ elif menu == "✍️ 每日資產動態輸入":
             st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
 
 # ==========================================
-# 功能三：⚙️ 投資標的持股管理
+# 功能三：⚙️ 投資標的持股管理 (🎯 已更新安全剔除過濾機制)
 # ==========================================
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
@@ -619,10 +611,25 @@ elif menu == "⚙️ 投資標的持股管理":
     if not df_portfolio.empty:
         df_portfolio = df_portfolio.dropna(subset=["標的名稱"])
         st.subheader("✏️ 線上編輯持股資訊")
+        
+        # 讓使用者在網頁上直觀編輯所有持股細節
         edited_df = st.data_editor(df_portfolio, num_rows="dynamic")
         
         if st.button("💾 儲存並同步至 Google Sheets"):
-            with st.spinner('正在儲存...'):
-                conn.update(worksheet="portfolio_config", data=edited_df)
-            st.success("💾 修改已同步！")
+            with st.spinner('正在進行欄位過濾並儲存至雲端...'):
+                # 🎯 核心防線：強行剔除含有公式的「個股現價」與其他衍生唯讀計算欄位
+                # 這樣只會上傳你的自訂持股設定，絕對不會寫入並覆蓋 Google Sheets 內建的股價公式
+                clean_upload_df = edited_df.drop(
+                    columns=[
+                        '個股現價', '單位現價', '當前市值', 
+                        '目前投資占比', '偏離度 (Diff)', '買賣建議',
+                        'Yahoo代號_clean', '標的名稱_clean'
+                    ], 
+                    errors='ignore'
+                )
+                
+                # 執行寫入，只更新白名單內的設定欄位
+                conn.update(worksheet="portfolio_config", data=clean_upload_df)
+                
+            st.success("💾 持股修改已成功同步！已全自動阻斷並保護 Google Sheets 內的股價自動公式。")
             st.cache_data.clear()
