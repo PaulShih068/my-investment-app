@@ -109,7 +109,7 @@ def calculate_remaining_loans(current_date):
     return l1_rem, l2_rem, l1_payments, l2_payments
 
 # ==========================================
-# 🔓 系統安全登入驗證機制
+# 🔒 系統安全登入驗證機制
 # ==========================================
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
@@ -210,28 +210,30 @@ def get_usd_twd_rate():
         data = yf.download("USDTWD=X", period='5d', progress=False)
         if not data.empty and 'Close' in data.columns:
             closes = data['Close'].dropna()
-            if not closes.empty and float(closes.iloc[-1]) > 0:
+            if not closes.empty Sea float(closes.iloc[-1]) > 0:
                 return round(float(closes.iloc[-1]), 4)
         return 32.5
     except Exception:
         return 32.5
 
 # ==========================================
-# 🔄 聖杯封裝：全功能型核心同步與公式還原引擎
+# 🔄 系統核心引擎：完美 Upsert 日期判斷與公式保護
 # ==========================================
 def execute_system_wide_sync(custom_connection=None):
-    """此函數整合手動與自動排程，執行：最新股價計算、歷史紀錄追加、並完美重組保護雲端公式。"""
     try:
         active_conn = custom_connection if custom_connection else conn
         
-        # 1. 讀取最新配置
+        # 1. 讀取最新雲端配置 (強制作廢快取讀取即時狀態)
         df_history_sync = active_conn.read(worksheet="daily_asset_history", ttl=0)
         df_portfolio_sync = active_conn.read(worksheet="portfolio_config", ttl=0)
         
         df_history_sync = df_history_sync.dropna(subset=["日期"])
         df_portfolio_sync = df_portfolio_sync.dropna(subset=["標的名稱"])
         
-        # 2. 即時獲取報價與匯率
+        # 🎯 核心修復防線：將歷史資料庫中的日期欄位全數轉換成標準字串 (YYYY-MM-DD)
+        df_history_sync['日期'] = pd.to_datetime(df_history_sync['日期']).dt.strftime("%Y-%m-%d")
+        
+        # 2. 獲取報價與匯率並進行清算
         prices_map = fetch_realtime_prices(df_portfolio_sync['Yahoo代號'].tolist())
         usd_rate = get_usd_twd_rate()
         
@@ -266,34 +268,36 @@ def execute_system_wide_sync(custom_connection=None):
         total_mv_calculated = df_portfolio_sync['當前市值'].sum()
         total_cost_calculated = df_portfolio_sync['投資成本'].sum()
         
-        # 3. 追加歷史紀錄
+        # 3. 根據當天日期判定執行「產生新資料列」或「精準就地更新」
         today_str = datetime.now().strftime("%Y-%m-%d")
-        df_history_sync['日期'] = df_history_sync['日期'].astype(str)
         
-        df_history_temp = df_history_sync.copy()
-        df_history_temp['日期'] = pd.to_datetime(df_history_temp['日期'])
-        df_history_temp = df_history_temp.sort_values(by="日期")
-        df_history_temp['日期'] = df_history_temp['日期'].dt.strftime("%Y-%m-%d")
+        # 計算相對於昨天的增額
+        df_history_sorted = df_history_sync.copy()
+        df_history_sorted['日期'] = pd.to_datetime(df_history_sorted['日期'])
+        df_history_sorted = df_history_sorted.sort_values(by="日期")
+        df_history_sorted['日期'] = df_history_sorted['日期'].dt.strftime("%Y-%m-%d")
+        df_yesterday = df_history_sorted[df_history_sorted['日期'] < today_str]
         
-        df_yesterday = df_history_temp[df_history_temp['日期'] < today_str]
         daily_diff = total_mv_calculated - float(df_yesterday['總資產金額'].iloc[-1]) if not df_yesterday.empty else 0.0
         daily_roi = round((total_mv_calculated - total_cost_calculated) / total_cost_calculated, 4) if total_cost_calculated > 0 else 0.0
         
-        new_row_data = {
-            "日期": today_str,
-            "總資產金額": int(round(total_mv_calculated)),
-            "每日增額": int(round(daily_diff)),
-            "每日報酬率": float(daily_roi)
-        }
-        
+        # 🎯 核心日期分流邏輯
         if today_str in df_history_sync['日期'].values:
+            # ✅ 當天紀錄已存在 ➜ 精準就地更新，絕對不增加新行或覆蓋別人
             df_history_sync.loc[df_history_sync['日期'] == today_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
                 int(round(total_mv_calculated)), int(round(daily_diff)), float(daily_roi)
             ]
         else:
+            # ✅ 當天紀錄不存在 ➜ 根據當天日期產生一筆全新的歷史數據追加於末端
+            new_row_data = {
+                "日期": today_str,
+                "總資產金額": int(round(total_mv_calculated)),
+                "每日增額": int(round(daily_diff)),
+                "每日報酬率": float(daily_roi)
+            }
             df_history_sync = pd.concat([df_history_sync, pd.DataFrame([new_row_data])], ignore_index=True)
             
-        # 4. 多維度公式智慧還原再注入 (台股、美股、匯率公式完美固化)
+        # 4. 多維度公式智慧還原再注入防禦網
         final_upload_df = df_portfolio_sync.copy()
         final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
         
@@ -303,7 +307,7 @@ def execute_system_wide_sync(custom_connection=None):
             
             if "USDTWD" in ticker.upper() or "CURRENCY" in ticker.upper() or "匯率" in name:
                 final_upload_df.at[idx, '個股現價'] = '=GOOGLEFINANCE("CURRENCY:USDTWD")'
-            elif any(k in ticker for k in ['台幣', '現金']) or ticker == '' or ticker.lower() == 'nan':
+            elif any(k in ticker for k in ['台幣', '現金']) or any(k in name for k in ['台幣', '現金']) or ticker == '' or ticker.lower() == 'nan':
                 continue
             else:
                 if ":" in ticker:
@@ -321,11 +325,11 @@ def execute_system_wide_sync(custom_connection=None):
             errors='ignore'
         )
         
-        # 5. 回寫雲端
+        # 5. 安全回寫雲端雙工作表
         active_conn.update(worksheet="daily_asset_history", data=df_history_sync)
         active_conn.update(worksheet="portfolio_config", data=final_upload_df)
         return True
-    except Exception as e:
+    except Exception:
         return False
 
 # ==========================================
@@ -341,7 +345,6 @@ def background_scheduler(static_times):
             
             if current_time_str in static_times:
                 if st.session_state.get("last_scheduled_trigger", "") != trigger_id:
-                    # 💡 核心修復：背景獨立執行緒中建立全新連線物件，解決 Streamlit Context 的跨執行緒卡死 Bug
                     bg_conn = st.connection("gsheets", type=GSheetsConnection)
                     success = execute_system_wide_sync(custom_connection=bg_conn)
                     if success:
@@ -408,7 +411,7 @@ if st.sidebar.button("🔓 安全登出系統", use_container_width=True):
     st.rerun()
 
 # ==========================================
-# 功能一：📊 投資總覽儀表板 (保留全部原功能 + 修復立即同步按鈕)
+# 功能一：📊 投資總覽儀表板
 # ==========================================
 if menu == "📊 投資總覽儀表板":
     st.title("📊 個人即時投資動態儀表板 (Google Sheets 同步)")
@@ -479,14 +482,13 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("### ⚡️ 快速同步控制區")
     col_btn, col_info = st.columns([1, 3])
     with col_btn:
-        # 💡 核心修復點：直接調用完美封裝的系統級全功能引擎，點擊立即同步不再失效！
         sync_clicked = st.button("🔄 立即同步最新資產至 Google 雲端", use_container_width=True)
         
     with col_info:
         st.info("💡 雲端優化限流版：排程在無人造訪時採用快取機制保護，杜絕觸發 Google 429 錯誤限流配額。")
         
     if sync_clicked:
-        with st.spinner('正在執行全自動資產清算與公式還原防護同步...'):
+        with st.spinner('正在執行全自動資產清算與 Upsert 日期公式防護同步...'):
             res = execute_system_wide_sync()
             if res:
                 st.success(f"🎉 成功同步！請重新整理網頁！")
@@ -509,8 +511,14 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_pct'] if 'currently_market_pct' in df_portfolio.columns else (df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重'])
     
+    if '偏離度 (Diff)' not in df_portfolio.columns or df_portfolio['偏離度 (Diff)'].isna().all():
+        df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+        
+    if '偏離度 (Diff)' not in df_portfolio.columns or df_portfolio['偏離度 (Diff)'].isna().all():
+        df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
             return f"⚠️ 建議減碼 {row['標的名稱']}"
@@ -525,7 +533,7 @@ if menu == "📊 投資總覽儀表板":
     }))
 
 # ==========================================
-# 功能二：✍️ 每日資產動態輸入 (完好保留原歷史分頁管理功能)
+# 功能二：✍️ 每日資產動態輸入
 # ==========================================
 elif menu == "✍️ 每日資產動態輸入":
     st.title("✍️ 每日資產金額輕鬆記")
@@ -623,7 +631,7 @@ elif menu == "✍️ 每日資產動態輸入":
             st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
 
 # ==========================================
-# 功能三：⚙️ 投資標的持股管理 (完好保留全防禦型編輯器)
+# 功能三：⚙️ 投資標的持股管理
 # ==========================================
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
