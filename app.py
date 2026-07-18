@@ -114,7 +114,7 @@ if not st.session_state["logged_in"]:
 def fetch_realtime_prices(tickers):
     prices = {}
     cash_keywords = ['現金', '台幣現金', '美金現金', 'TAIBI', 'CASH']
-    valid_tickers = list(set([str(t).strip() for t in tickers if t and str(t).strip() not in cash_keywords]))
+    valid_tickers = list(set([str(t).strip() for t in tickers if t and str(t).strip() not in cash_keywords and str(t).strip().lower() != 'nan']))
     
     fallback_prices = {
         "00631L.TW": 32.17,
@@ -222,12 +222,12 @@ if menu == "📊 投資總覽儀表板":
     else:
         df_portfolio['單位現價'] = df_portfolio['Yahoo代號'].map(current_prices).fillna(0.0)
         
-    # 強制清洗與轉換型態
-    df_portfolio['Yahoo代號_clean'] = df_portfolio['Yahoo代號'].astype(str).str.strip()
+    # 🎯 安全防護升級：確保轉化為純文字字串，徹底排除浮點數 NaN 引起的 TypeError 崩潰
+    df_portfolio['Yahoo代號_clean'] = df_portfolio['Yahoo代號'].fillna('').astype(str).str.strip()
     
     for idx, row in df_portfolio.iterrows():
         ticker = row['Yahoo代號_clean']
-        # 只要名稱包含現金、台幣、美金，就實施保底覆蓋
+        # 確保 ticker 為有效字串後再進行模糊比對
         if any(k in ticker for k in ['台幣', '美金', '現金']):
             sheet_cash_val = 0.0
             if target_price_column in df_portfolio.columns:
@@ -238,21 +238,16 @@ if menu == "📊 投資總覽儀表板":
             else:
                 df_portfolio.loc[idx, '單位現價'] = 1.0
     
-    # 🎯 核心重構：模糊關鍵字強效阻斷引擎（徹底防止人為空白導致白名單漏勾）
+    # 模糊關鍵字強效阻斷引擎
     def calculate_twd_market_value(row):
         ticker = str(row['Yahoo代號_clean']).strip()
         price = float(row['單位現價'])
         qty = float(row['持有數量'])
         
-        # 🛡️ 盾牌一：只要包含「台幣」或「現金」字眼，或者是台灣市場代號，100% 阻斷美金匯率
-        if '台幣' in ticker or '現金' in ticker or ticker.endswith('.TW') or ticker.endswith('.tw'):
+        if '台幣' in ticker or '現金' in ticker or ticker.endswith('.TW') or ticker.endswith('.tw') or ticker == '':
             return price * qty
-            
-        # 🛡️ 盾牌二：精準包含「美金現金」字眼，自動轉換
-        elif '美金現金' in ticker:
+        elif '美金' in ticker:
             return price * qty * usd_twd_rate
-            
-        # 🛡️ 盾牌三：其餘所有國外資產標的
         else:
             return price * qty * usd_twd_rate
 
@@ -342,6 +337,8 @@ if menu == "📊 投資總覽儀表板":
     
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
+    
+    # 🎯 校正重複與印刷錯誤欄位
     df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
     
     def generate_advice(row):
@@ -530,10 +527,10 @@ elif menu == "✍️ 每日資產動態輸入":
     elif search_option == "自訂日期範圍":
         col_date1, col_date2 = st.columns(2)
         with col_date1:
-            start_date_input = st.date_input("查詢開始日期：", today - timedelta(days=30), key="query_start")
+            st.date_input("查詢開始日期：", today - timedelta(days=30), key="query_start")
         with col_date2:
-            end_date_input = st.date_input("查詢結束日期：", today, key="query_end")
-        df_display = df_display[(df_display['日期'] >= pd.to_datetime(start_date_input)) & (df_display['日期'] <= pd.to_datetime(end_date_input))]
+            st.date_input("查詢結束日期：", today, key="query_end")
+        df_display = df_display[(df_display['日期'] >= pd.to_datetime(st.session_state.query_start)) & (df_display['日期'] <= pd.to_datetime(st.session_state.query_end))]
         
     df_display['日期'] = df_display['日期'].dt.strftime("%Y-%m-%d")
     df_display['總資產金額'] = pd.to_numeric(df_display['總資產金額'], errors='coerce').fillna(0).round().astype(int)
