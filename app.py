@@ -11,9 +11,39 @@ import threading
 import time as time_module
 
 # ==========================================
-# 1. 系統設定與網頁配置
+# 1. 系統設定與網頁配置（內嵌行動端手機自適應 CSS 盾牌）
 # ==========================================
 st.set_page_config(page_title="個人智慧投資紀錄簿", layout="wide", initial_sidebar_state="expanded")
+
+# 🎯 核心 RWD 注入：強制手機瀏覽時優化字體、卡片排版與表格容器
+st.markdown("""
+<style>
+    /* 手機與行動裝置 RWD 樣式微調 (螢幕寬度小於 768px) */
+    @media (max-width: 768px) {
+        /* 調小主標題與副標題字級，避免中文字體在手機端斷行 */
+        .main h1 { font-size: 1.8rem !important; }
+        .main h2 { font-size: 1.4rem !important; }
+        .main h3 { font-size: 1.1rem !important; }
+        
+        /* 強制 Streamlit 原生卡片與欄位排版在手機上改為垂直單欄排列 */
+        [data-testid="stHorizontalBlock"] {
+            flex-direction: column !important;
+            gap: 10px !important;
+        }
+        
+        /* 縮小 Dataframe 表格元件內的文字，方便單一螢幕裝下更多欄位 */
+        div[data-testid="stDataFrame"] table {
+            font-size: 12px !important;
+        }
+        div[data-testid="stDataFrame"] td, div[data-testid="stDataFrame"] th {
+            padding: 4px 6px !important;
+        }
+        
+        /* 讓手機端的提示資訊區塊與 KPI 卡片邊距變窄，釋放橫向空間 */
+        .stAlert { padding: 10px !important; }
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # 建立 Google Sheets 連結物件
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -32,9 +62,9 @@ if "last_scheduled_trigger" not in st.session_state:
     st.session_state["last_scheduled_trigger"] = ""
 
 # ==========================================
-# 🛡️ 流量防護盾：實體化全域快取函數 (解決 429 錯誤的核心)
+# 🛡️ 流量防護盾：實體化全域快取函數
 # ==========================================
-@st.cache_data(ttl=120)  # 快取 2 分鐘，大幅降低 Read Requests 頻率
+@st.cache_data(ttl=120)  
 def cached_read_sheets(worksheet_name):
     try:
         return conn.read(worksheet=worksheet_name, ttl=120)
@@ -191,7 +221,6 @@ def get_usd_twd_rate():
         data = yf.download("USDTWD=X", period='5d', progress=False)
         if not data.empty and 'Close' in data.columns:
             closes = data['Close'].dropna()
-            # 🎯 已修正：移除錯誤的 Image 字眼，恢復合法語法結構
             if not closes.empty and float(closes.iloc[-1]) > 0:
                 return round(float(closes.iloc[-1]), 4)
         return 32.5
@@ -455,7 +484,7 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # KPI 指標卡片
+    # KPI 指標卡片（在手機上會自動摺疊向下排列）
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("當前總市值 (TWD)", f"${total_market_value:,.2f}")
     col2.metric("投資總成本", f"${total_cost:,.2f}")
