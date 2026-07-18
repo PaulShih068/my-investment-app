@@ -446,7 +446,7 @@ if menu == "📊 投資總覽儀表板":
         
         df_history_temp = df_history.copy()
         df_history_temp['日期'] = pd.to_datetime(df_history_temp['日期'])
-        df_history_temp = df_history_sorted.sort_values(by="日期")
+        df_history_temp = df_history_temp.sort_values(by="日期")
         df_history_temp['日期'] = df_history_temp['日期'].dt.strftime("%Y-%m-%d")
         
         df_yesterday = df_history_temp[df_history_temp['日期'] < today_str]
@@ -599,12 +599,11 @@ elif menu == "✍️ 每日資產動態輸入":
             st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
 
 # ==========================================
-# 功能三：⚙️ 投資標的持股管理 (🎯 聖杯級修復：細胞級單格精準定位回寫技術)
+# 功能三：⚙️ 投資標的持股管理 (🎯 已修復物件屬性路徑)
 # ==========================================
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
     
-    # 1. 讀取包含全部欄位(包含個股現價)的原始數據作爲編輯基準
     try:
         df_portfolio_raw = conn.read(worksheet="portfolio_config", ttl=0)
     except Exception as e:
@@ -616,56 +615,45 @@ elif menu == "⚙️ 投資標的持股管理":
     st.subheader("✏️ 線上編輯持股資訊")
     st.info("🔒 終極安全機制：本頁面現在支援完整的欄位檢視。當您點擊儲存時，系統將採取單格精準寫入技術，只會把修改後的數量和成本送回對應的儲存格，其餘未修改的公式直欄在雲端完全不被觸碰！")
     
-    # 2. 顯示完整欄位，提供完美檢視與線上直接編輯
     edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_cell_editor")
     
     if st.button("💾 儲存並同步至 Google Sheets"):
         with st.spinner('正在進行儲存格精準定位更新，不破壞任何既有公式...'):
             try:
-                # 3. 獲取編輯器中的差異增量字典
                 editor_state = st.session_state.get("portfolio_cell_editor", {})
                 
-                # 4. 透過 conn.client 直接取得底層 gspread 工作表物件 (取得更細緻的單格控制權)
-                client = conn.client
-                # 自動對齊密鑰中的 spreadsheet 標籤開啟
+                # 🎯 核心修復點：深入隱私包裝類別內部，提取出標準的原生 gspread 客戶端
+                client = conn.client._client
                 sheet_id = st.secrets["connections"]["gsheets"]["spreadsheet"]
                 spreadsheet = client.open_by_key(sheet_id)
                 worksheet = spreadsheet.worksheet("portfolio_config")
                 
-                # 5. 執行定點儲存格精準複寫
+                # 執行定點儲存格精準複寫
                 if "edited_rows" in editor_state:
                     for row_idx, changes in editor_state["edited_rows"].items():
-                        # Google Sheets 的列索引從 1 開始，且第一列是標題列，因此資料列要加上 2
                         sheet_row = int(row_idx) + 2
                         
                         for col_name, new_value in changes.items():
-                            # 🛡️ 雙重核心防線：如果改動的欄位是「個股現價」，直接原地拋棄，絕對不寫入雲端
                             if col_name == '個股現價':
                                 continue
                                 
-                            # 尋找該欄位在試算表中的直欄順序 (Google Sheets 從 1 開始)
                             if col_name in df_portfolio_raw.columns:
                                 sheet_col = df_portfolio_raw.columns.get_loc(col_name) + 1
-                                
-                                # 🎯 核心精準打擊：只針對這個被修改的儲存格執行 update_cell，完全不影響隔壁的公式欄！
                                 worksheet.update_cell(sheet_row, sheet_col, new_value)
                 
-                # 6. 新增列的防禦性處理 (使用者按 +)
+                # 新增列的防禦性處理
                 if "added_rows" in editor_state:
                     for new_row in editor_state["added_rows"]:
-                        # 移除新列中可能產生的個股現價欄位
                         if '個股現價' in new_row:
                             del new_row['個股現價']
                         
-                        # 依照原始表單的欄位順序排列成陣列，缺少的補空值
                         row_to_append = []
                         for col in df_portfolio_raw.columns:
                             row_to_append.append(new_row.get(col, ""))
                         worksheet.append_row(row_to_append)
                 
-                # 7. 刪除列的防禦性處理 (使用者按垃圾桶)
+                # 刪除列的防禦性處理
                 if "deleted_rows" in editor_state:
-                    # 遞減刪除，避免索引移位
                     for row_idx in sorted(editor_state["deleted_rows"], reverse=True):
                         sheet_row = int(row_idx) + 2
                         worksheet.delete_rows(sheet_row)
