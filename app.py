@@ -191,18 +191,19 @@ def get_usd_twd_rate():
         data = yf.download("USDTWD=X", period='5d', progress=False)
         if not data.empty and 'Close' in data.columns:
             closes = data['Close'].dropna()
-            if not closes.empty Image and float(closes.iloc[-1]) > 0:
+            # 🎯 已修正：移除錯誤的 Image 字眼，恢復合法語法結構
+            if not closes.empty and float(closes.iloc[-1]) > 0:
                 return round(float(closes.iloc[-1]), 4)
         return 32.5
     except Exception:
         return 32.5
 
 # ==========================================
-# 🔄 背景排程引擎：修正高頻輪詢問題
+# 🔄 背景排程引擎
 # ==========================================
 def execute_background_sync():
     try:
-        df_history_bg = conn.read(worksheet="daily_asset_history", ttl=60) # 提高內部 ttl
+        df_history_bg = conn.read(worksheet="daily_asset_history", ttl=60)
         df_portfolio_bg = conn.read(worksheet="portfolio_config", ttl=60)
         df_history_bg = df_history_bg.dropna(subset=["日期"])
         df_portfolio_bg = df_portfolio_bg.dropna(subset=["標的名稱"])
@@ -272,7 +273,6 @@ def execute_background_sync():
     except Exception:
         return False
 
-# 常駐背景計時守護執行緒 (改用傳遞參數，不在 while 內執行高頻雲端請求)
 def background_scheduler(static_times):
     while True:
         try:
@@ -299,7 +299,6 @@ st.sidebar.write(f"👤 目前使用者：`{st.session_state['username']}`")
 st.sidebar.markdown("---")
 st.sidebar.subheader("⏰ 雲端持久化自動排程設定")
 
-# 📊 使用緩存盾牌載入排程時間，避免 429 崩潰
 df_load_sched = cached_read_sheets("scheduler_config")
 if df_load_sched.empty or "觸發時間" not in df_load_sched.columns:
     initial_times = ["14:00"]
@@ -307,7 +306,6 @@ else:
     initial_times = df_load_sched["觸發時間"].dropna().astype(str).tolist()
 
 init_count = min(max(len(initial_times), 1), 5)
-
 num_times = st.sidebar.number_input("設定每日定時更新次數 (最多5次)：", min_value=1, max_value=5, value=init_count, step=1)
 
 scheduled_times_list = []
@@ -332,10 +330,9 @@ if st.sidebar.button("💾 儲存並啟用雲端排程", use_container_width=Tru
     with st.spinner("正在將排程時間寫入 Google Sheets..."):
         conn.update(worksheet="scheduler_config", data=df_save_sched)
     st.sidebar.success("🎉 排程時間成功固化！")
-    st.cache_data.clear()  # 清除快取以套用全新時間
+    st.cache_data.clear()
     st.rerun()
 
-# 啟動常駐背景監聽引擎
 if "scheduler_thread_started" not in st.session_state:
     t = threading.Thread(target=background_scheduler, args=(scheduled_times_list,), daemon=True)
     t.start()
@@ -470,11 +467,8 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_pct'] if 'currently_market_pct' in df_portfolio.columns else (df_portfolio['目前投資占比'] - df_portfolio['核心權重'])
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
     
-    if '偏離度 (Diff)' not in df_portfolio.columns:
-        df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
-
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
             return f"⚠️ 建議減碼 {row['標的名稱']}"
