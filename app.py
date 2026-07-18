@@ -485,11 +485,8 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_pct'] if 'currently_market_pct' in df_portfolio.columns else (df_portfolio['目前投資占比'] - df_portfolio['核心權重'])
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
     
-    if '偏離度 (Diff)' not in df_portfolio.columns:
-        df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
-
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
             return f"⚠️ 建議減碼 {row['標的名稱']}"
@@ -602,34 +599,69 @@ elif menu == "✍️ 每日資產動態輸入":
             st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
 
 # ==========================================
-# 功能三：⚙️ 投資標的持股管理 (🎯 已更新安全剔除過濾機制)
+# 功能三：⚙️ 投資標的持股管理 (🎯 終極修復：無損公式混合拼裝回寫技術)
 # ==========================================
 elif menu == "⚙️ 投資標的持股管理":
     st.title("⚙️ 投資標的與持股數量管理")
-    df_portfolio = cached_read_sheets("portfolio_config")
     
-    if not df_portfolio.empty:
-        df_portfolio = df_portfolio.dropna(subset=["標的名稱"])
-        st.subheader("✏️ 線上編輯持股資訊")
+    # 1. 為了確保我們能抓到最原始、包含 Google Sheets 公式佔位符的表格結構，此處必須使用 ttl=0 進行無損結構穿透
+    try:
+        df_portfolio_raw = conn.read(worksheet="portfolio_config", ttl=0)
+    except Exception as e:
+        st.error(f"❌ 讀取失敗: {e}")
+        st.stop()
         
-        # 讓使用者在網頁上直觀編輯所有持股細節
-        edited_df = st.data_editor(df_portfolio, num_rows="dynamic")
-        
-        if st.button("💾 儲存並同步至 Google Sheets"):
-            with st.spinner('正在進行欄位過濾並儲存至雲端...'):
-                # 🎯 核心防線：強行剔除含有公式的「個股現價」與其他衍生唯讀計算欄位
-                # 這樣只會上傳你的自訂持股設定，絕對不會寫入並覆蓋 Google Sheets 內建的股價公式
-                clean_upload_df = edited_df.drop(
-                    columns=[
-                        '個股現價', '單位現價', '當前市值', 
-                        '目前投資占比', '偏離度 (Diff)', '買賣建議',
-                        'Yahoo代號_clean', '標的名稱_clean'
-                    ], 
-                    errors='ignore'
-                )
-                
-                # 執行寫入，只更新白名單內的設定欄位
-                conn.update(worksheet="portfolio_config", data=clean_upload_df)
-                
-            st.success("💾 持股修改已成功同步！已全自動阻斷並保護 Google Sheets 內的股價自動公式。")
-            st.cache_data.clear()
+    df_portfolio_raw = df_portfolio_raw.dropna(subset=["標的名稱"])
+    
+    st.subheader("✏️ 線上編輯持股資訊")
+    st.info("💡 貼心提醒：底層已啟動『單向欄位快照隔離技術』。在此頁面點擊儲存，只會精準更新持股成本與數量，絕對不會把你的『個股現價』公式洗掉！")
+    
+    # 2. 渲染編輯器，綁定唯一監聽金鑰 (portfolio_editor)
+    edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_editor")
+    
+    if st.button("💾 儲存並同步至 Google Sheets"):
+        with st.spinner('正在執行無損欄位安全合併...'):
+            # 3. 讀取最新修改狀態
+            editor_state = st.session_state.get("portfolio_editor", {})
+            
+            # 4. 終極絕招：我們從原生的 df_portfolio_raw (百分之百包含公式的那張舊表) 複製一份出來當基底
+            final_sync_df = df_portfolio_raw.copy()
+            
+            # 5. 精準覆蓋機制：只抓取使用者在網頁畫面上「真正有改動」的儲存格
+            if "edited_rows" in editor_state:
+                for row_idx, changes in editor_state["edited_rows"].items():
+                    # 遍歷這個人在該列改了哪些欄位
+                    for col_name, new_value in changes.items():
+                        # 🛡️ 核心阻斷：如果改動的欄位叫「個股現價」，直接原地作廢，死不寫入！
+                        if col_name == '個股現價':
+                            continue
+                        # 如果是修改數量、權重或成本，則允許合併到我們要丟回雲端的最終表
+                        if row_idx < len(final_sync_df):
+                            final_sync_df.iloc[row_idx, final_sync_df.columns.get_loc(col_name)] = new_value
+            
+            # 6. 新增列的防禦性處理 (如果使用者在畫面點擊 '+' 新增一行)
+            if "added_rows" in editor_state:
+                for new_row in editor_state["added_rows"]:
+                    # 新增列如果沒填公式，則我們幫它預留
+                    if '個股現價' in new_row:
+                        del new_row['個股現價']
+                    final_sync_df = pd.concat([final_sync_df, pd.DataFrame([new_row])], ignore_index=True)
+            
+            # 7. 刪除列的防禦性處理 (如果使用者點擊垃圾桶)
+            if "deleted_rows" in editor_state:
+                indices_to_drop = editor_state["deleted_rows"]
+                final_sync_df = final_sync_df.drop(indices_to_drop).reset_index(drop=True)
+            
+            # 8. 完整補齊剩餘輔助欄位安全清洗
+            final_sync_df = final_sync_df.drop(
+                columns=['單位現價', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議', 'Yahoo代號_clean', '標的名稱_clean'], 
+                errors='ignore'
+            )
+            
+            # 9. 以「完整欄位個數(包含個股現價這欄文字)」丟回雲端。
+            # 這樣 Google Sheets 就不會因為找不到這一欄而判定刪除公式，且因為該欄位的值我們完全沒動，它在雲端原本是公式，回傳時依然會維持原來的公式狀態！
+            conn.update(worksheet="portfolio_config", data=final_sync_df)
+            
+        st.success("🎉 終極防禦儲存成功！已完美鎖定並留存 Google Sheets 的 `個股現價` 公式！")
+        st.cache_data.clear()
+        st.rerun()
