@@ -113,7 +113,6 @@ if not st.session_state["logged_in"]:
 # ==========================================
 def fetch_realtime_prices(tickers):
     prices = {}
-    # 過濾掉不需要查 Yahoo Finance 的台幣與美金現金項目
     cash_keywords = ['現金', '台幣現金', '美金現金']
     valid_tickers = list(set([str(t).strip() for t in tickers if t and str(t).strip() not in cash_keywords]))
     
@@ -223,9 +222,9 @@ if menu == "📊 投資總覽儀表板":
     else:
         df_portfolio['單位現價'] = df_portfolio['Yahoo代號'].map(current_prices).fillna(0.0)
         
+    # 強制清洗資產代號，移除所有首尾空格干擾
     df_portfolio['Yahoo代號_clean'] = df_portfolio['Yahoo代號'].astype(str).str.strip()
     
-    # 🎯 核心修正點：現金分流與自動換算引擎
     for idx, row in df_portfolio.iterrows():
         ticker = row['Yahoo代號_clean']
         if ticker in ['台幣現金', '美金現金', '現金']:
@@ -233,25 +232,27 @@ if menu == "📊 投資總覽儀表板":
             if target_price_column in df_portfolio.columns:
                 sheet_cash_val = pd.to_numeric(row[target_price_column], errors='coerce')
             
-            # 如果你在個股現價有填寫自訂數字就採用它；若為空則保底設為 1.0 透過數量來算市值
             if not np.isnan(sheet_cash_val) and sheet_cash_val > 0:
                 df_portfolio.loc[idx, '單位現價'] = sheet_cash_val
             else:
                 df_portfolio.loc[idx, '單位現價'] = 1.0
     
-    # 🎯 市值換算分流演算法
+    # 🎯 終極修復：正向白名單換算演算法（徹底阻斷台幣現金誤乘匯率）
     def calculate_twd_market_value(row):
-        ticker = str(row['Yahoo代號']).strip()
+        ticker = str(row['Yahoo代號_clean']).strip()
         price = float(row['單位現價'])
         qty = float(row['持有數量'])
         
-        if ticker == '台幣現金' or ticker == '現金' or ticker.endswith('.TW'):
+        # 🛡️ 條款一：台幣現金、舊現金代號、以及台灣股票 (.TW) -> 絕對不乘以匯率
+        if ticker == '台幣現金' or ticker == '現金' or ticker.endswith('.TW') or ticker.endswith('.tw'):
             return price * qty
+            
+        # 🛡️ 條款二：美金現金 -> 自動乘以美金匯率
         elif ticker == '美金現金':
-            # 美金現金自動換算為台幣顯示
             return price * qty * usd_twd_rate
+            
+        # 🛡️ 條款三：其餘所有海外資產（例如 QQQM） -> 正常乘以美金匯率
         else:
-            # 一般國外標的（如 QQQM）正常乘以美金匯率
             return price * qty * usd_twd_rate
 
     df_portfolio['當前市值'] = df_portfolio.apply(calculate_twd_market_value, axis=1)
@@ -340,7 +341,7 @@ if menu == "📊 投資總覽儀表板":
     
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_diff'] = df_portfolio['currently_diff'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
     
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
