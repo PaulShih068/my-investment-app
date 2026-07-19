@@ -240,7 +240,7 @@ def execute_system_wide_sync(custom_connection=None):
         df_portfolio_sync = df_portfolio_sync.dropna(subset=["標的名稱"])
         
         # 數據清理：確保歷史日期全數轉換成標準字串 (YYYY-MM-DD)
-        df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['日期']).dt.strftime("%Y-%m-%d")
+        df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
         
         # 2. 獲取報價與匯率並進行清算
         prices_map = fetch_realtime_prices(df_portfolio_sync['Yahoo代號'].tolist())
@@ -277,7 +277,7 @@ def execute_system_wide_sync(custom_connection=None):
         total_mv_calculated = df_portfolio_sync['當前市值'].sum()
         total_cost_calculated = df_portfolio_sync['投資成本'].sum()
         
-        # 3. 🎯 導入時區防禦線：根據台灣時間判斷今日日期與增額
+        # 3. 導入時區防禦線：根據台灣時間判斷今日日期與增額
         tw_now = get_taiwan_now()
         today_str = tw_now.strftime("%Y-%m-%d")
         
@@ -295,6 +295,8 @@ def execute_system_wide_sync(custom_connection=None):
             df_history_sync.loc[df_history_sync['開時日期'] == today_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
                 int(round(total_mv_calculated)), int(round(daily_diff)), float(daily_roi)
             ]
+            # 同步將實際對外的「日期」欄位更正，防止前端抓錯
+            df_history_sync.loc[df_history_sync['開時日期'] == today_str, "日期"] = today_str
         else:
             new_row_data = {
                 "日期": today_str,
@@ -348,7 +350,6 @@ def execute_system_wide_sync(custom_connection=None):
 def background_scheduler(static_times):
     while True:
         try:
-            # 🎯 導入時區防禦線：排程觸發比對全面採用台灣本地時間
             tw_now = get_taiwan_now()
             current_time_str = tw_now.strftime("%H:%M")
             current_date_str = tw_now.strftime("%Y-%m-%d")
@@ -407,7 +408,7 @@ if st.sidebar.button("💾 儲存並啟用雲端排程", use_container_width=Tru
     st.cache_data.clear()
     st.rerun()
 
-# 激活背景守護執行緒 (將設定的排程時間傳入)
+# 激活背景守護執行緒
 if "scheduler_thread_started" not in st.session_state:
     t = threading.Thread(target=background_scheduler, args=(scheduled_times_list,), daemon=True)
     t.start()
@@ -444,7 +445,6 @@ if menu == "📊 投資總覽儀表板":
     st.sidebar.metric("💵 當前美金匯率 (USD/TWD)", f"${usd_twd_rate:.4f}")
     st.sidebar.success(f"🤖 雲端持久排程監聽中！\n每日觸發時間點：`{', '.join(scheduled_times_list)}`")
     
-    # 🎯 貸款餘額計算也同步對齊台灣目前日期
     tw_today_date = get_taiwan_now().date()
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(tw_today_date)
     total_loan_balance = l1_remain + l2_remain
@@ -523,10 +523,10 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
     
-    if '偏離度 (Diff)' not in df_portfolio.columns or df_portfolio['偏離度 (Diff decay)'].isna().all() if '偏離度 (Diff decay)' in df_portfolio.columns else df_portfolio['偏離度 (Diff)'].isna().all():
-        df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+    if '偏離度 (Diff)' not in df_portfolio.columns or df_portfolio['偏離度 (Diff)'].isna().all():
+        df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['開目前投資占比'] - df_portfolio['核心權重'] if '開目前投資占比' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
 
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
@@ -542,7 +542,7 @@ if menu == "📊 投資總覽儀表板":
     }))
 
 # ==========================================
-# 功能二：✍️ 每日資產動態輸入
+# 功能二：✍️ 每日資產動態輸入 (🎯 已修正歷史查詢比對崩潰錯誤)
 # ==========================================
 elif menu == "✍️ 每日資產動態輸入":
     st.title("✍️ 每日資產金額輕鬆記")
@@ -555,7 +555,6 @@ elif menu == "✍️ 每日資產動態輸入":
         total_cost = df_portfolio['投資成本'].sum()
         
         with st.form("daily_input_form", clear_on_submit=True):
-            # ✍️ 手動輸入表單也預設為台灣當前日期
             input_date = st.date_input("選擇紀錄日期：", get_taiwan_now())
             input_amount = st.number_input("今日結算總資產金額 (TWD)：", min_value=0.0, step=1000.0, format="%.2f")
             submit_button = st.form_submit_button(label="🚀 提交並儲存至 Google Sheets")
@@ -587,7 +586,7 @@ elif menu == "✍️ 每日資產動態輸入":
                     "每日報酬率": float(daily_roi)
                 }
                 
-                if date_str in df_history['開時日期'].values if '開時日期' in df_history.columns else date_str in df_history['日期'].values:
+                if date_str in df_history['日期'].values:
                     df_history.loc[df_history['日期'] == date_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
                         input_amount_rounded, daily_diff_rounded, float(daily_roi)
                     ]
@@ -608,24 +607,27 @@ elif menu == "✍️ 每日資產動態輸入":
             horizontal=True
         )
         
+        # 🎯 核心修復點：複製歷史資料後，強制將「日期」欄位歸一化為 Pandas 標準 datetime64[ns]
         df_display = df_history.copy()
         df_display['日期'] = pd.to_datetime(df_display['日期'])
         df_display = df_display.sort_values(by="日期", ascending=False)
         tw_now_display = get_taiwan_now()
         
+        # 根據選取區間，將篩選基準點（start_date）統一格式化
         if search_option == "近 7 天":
             start_date = tw_now_display - timedelta(days=7)
-            df_display = df_display[df_display['開時日期'] >= pd.to_datetime(start_date).strftime("%Y-%m-%d") if '開時日期' in df_display.columns else df_display['日期'] >= pd.to_datetime(start_date)]
+            df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date.date())]
         elif search_option == "近 30 天":
             start_date = tw_now_display - timedelta(days=30)
-            df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
+            df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date.date())]
         elif search_option == "近 180 天":
             start_date = tw_now_display - timedelta(days=180)
-            df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
+            df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date.date())]
         elif search_option == "今年以來 (YTD)":
             start_date = datetime(tw_now_display.year, 1, 1)
             df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
             
+        # 篩選結束後，再將資料轉回乾淨的 A1 格式字串呈現在網頁表格上
         df_display['日期'] = df_display['日期'].dt.strftime("%Y-%m-%d")
         df_display['總資產金額'] = pd.to_numeric(df_display['總資產金額'], errors='coerce').fillna(0).round().astype(int)
         df_display['每日增額'] = pd.to_numeric(df_display['每日增額'], errors='coerce').fillna(0).round().astype(int)
