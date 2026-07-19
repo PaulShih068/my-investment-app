@@ -237,7 +237,7 @@ def execute_system_wide_sync(custom_connection=None):
         df_history_sync = df_history_sync.dropna(subset=["日期"])
         df_portfolio_sync = df_portfolio_sync.dropna(subset=["標的名稱"])
         
-        df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
+        df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
         
         prices_map = fetch_realtime_prices(df_portfolio_sync['Yahoo代號'].tolist())
         usd_rate = get_usd_twd_rate()
@@ -277,10 +277,8 @@ def execute_system_wide_sync(custom_connection=None):
         today_str = tw_now.strftime("%Y-%m-%d")
         
         df_history_sorted = df_history_sync.copy()
-        df_history_sorted['日期'] = pd.to_datetime(df_history_sorted['日期'])
-        df_history_sorted = df_history_sorted.sort_values(by="日期")
-        df_history_sorted['日期'] = df_history_sorted['日期'].dt.strftime("%Y-%m-%d")
-        df_yesterday = df_history_sorted[df_history_sorted['日期'] < today_str]
+        df_history_sorted['開時日期_temp'] = pd.to_datetime(df_history_sorted['日期']).dt.strftime("%Y-%m-%d")
+        df_yesterday = df_history_sorted[df_history_sorted['開時日期_temp'] < today_str]
         
         daily_diff = total_mv_calculated - float(df_yesterday['總資產金額'].iloc[-1]) if not df_yesterday.empty else 0.0
         daily_roi = round((total_mv_calculated - total_cost_calculated) / total_cost_calculated, 4) if total_cost_calculated > 0 else 0.0
@@ -414,7 +412,7 @@ if st.sidebar.button("🔓 安全登出系統", use_container_width=True):
     st.rerun()
 
 # ==========================================
-# 功能一：📊 投資總覽儀表板 (🔥 恢復貸款明細與新增雙 Plotly 核心視覺化)
+# 功能一：📊 投資總覽儀表板
 # ==========================================
 if menu == "📊 投資總覽儀表板":
     st.title("📊 個人即時投資動態儀表板 (Google Sheets 同步)")
@@ -435,7 +433,7 @@ if menu == "📊 投資總覽儀表板":
     
     st.sidebar.metric("💵 當前美金匯率 (USD/TWD)", f"${usd_twd_rate:.4f}")
     
-    # 🏦 恢復功能：動態計算與顯示信用貸款明細
+    # 🏦 信用貸款明細
     tw_today_date = get_taiwan_now().date()
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(tw_today_date)
     total_loan_balance = l1_remain + l2_remain
@@ -453,7 +451,7 @@ if menu == "📊 投資總覽儀表板":
         st.info(f"""
         **信貸第二主線 (L2)**
         * 原始借貸本金：`$2,016,662 TWD`
-        * 已繳款期數：`{l2_pay_count} 期` (每月10日自動扣繳 `$188,72`)
+        * 已繳款期數：`{l2_pay_count} 期` (每月10日自動扣繳 `$18,872`)
         * **當前剩餘本金：${l2_remain:,.0f} TWD**
         """)
     
@@ -525,21 +523,27 @@ if menu == "📊 投資總覽儀表板":
     col2.metric("投資總成本", f"${total_cost:,.2f}")
     col3.metric("累積投資獲利", f"${total_profit:,.2f}", delta=f"{total_roi*100:.2f}% 報酬率")
     
-    # 🏦 恢復維持率連動機制
     maintenance_rate = (total_market_value / total_loan_balance) if total_loan_balance > 0 else 0
     col4.metric("質押維持率", f"{maintenance_rate*100:.2f}%", delta="✅ 水位強韌" if maintenance_rate > 1.6 else "⚠️ 需注意風險")
 
     # ==========================================
-    # 📊 核心視覺化圖表增強區
+    # 📊 核心視覺化圖表增強區 (⚡️ 已追加圖表區間篩選連動功能)
     # ==========================================
     st.markdown("---")
     st.subheader("📈 智慧數據視覺化儀表板")
+    
+    # 🎯 核心功能：為圖表增加與記帳頁完全一致的區間查詢功能
+    chart_range_option = st.radio(
+        "選擇歷史趨勢圖顯示區間：",
+        ["近 7 天", "近 30 天", "近 180 天", "今年以來 (YTD)", "全部顯示"],
+        horizontal=True,
+        key="dashboard_chart_range"
+    )
     
     col_chart1, col_chart2 = st.columns([2, 3])
     
     with col_chart1:
         st.markdown("##### 🎯 1. 核心投資標的市值佔比")
-        # 過濾市值大於 0 的有效持股進行圓餅圖繪製
         df_pie_data = df_portfolio[df_portfolio['當前市值'] > 0]
         fig_pie = px.pie(
             df_pie_data, 
@@ -555,9 +559,25 @@ if menu == "📊 投資總覽儀表板":
     with col_chart2:
         st.markdown("##### 📊 2. 資產規模與每日報酬率歷史趨勢合併圖")
         if not df_history.empty:
+            # 複製並強制對齊型態，防止 TypeError 衝突
             df_chart_hist = df_history.copy()
             df_chart_hist['日期'] = pd.to_datetime(df_chart_hist['日期'])
             df_chart_hist = df_chart_hist.sort_values(by='日期')
+            tw_now_chart = get_taiwan_now()
+            
+            # 🎯 核心篩選邏輯：執行與記帳分頁完全對齊的基準點篩選
+            if chart_range_option == "近 7 天":
+                start_dt = tw_now_chart - timedelta(days=7)
+                df_chart_hist = df_chart_hist[df_chart_hist['開資料日期'] >= pd.to_datetime(start_dt.date()) if '開資料日期' in df_chart_hist.columns else df_chart_hist['日期'] >= pd.to_datetime(start_dt.date())]
+            elif chart_range_option == "近 30 天":
+                start_dt = tw_now_chart - timedelta(days=30)
+                df_chart_hist = df_chart_hist[df_chart_hist['日期'] >= pd.to_datetime(start_dt.date())]
+            elif chart_range_option == "近 180 天":
+                start_dt = tw_now_chart - timedelta(days=180)
+                df_chart_hist = df_chart_hist[df_chart_hist['日期'] >= pd.to_datetime(start_dt.date())]
+            elif chart_range_option == "今年以來 (YTD)":
+                start_dt = datetime(tw_now_chart.year, 1, 1)
+                df_chart_hist = df_chart_hist[df_chart_hist['日期'] >= pd.to_datetime(start_dt)]
             
             # 建立高級雙 Y 軸混合圖表
             fig_combined = make_subplots(specs=[[{"secondary_y": True}]])
@@ -569,7 +589,7 @@ if menu == "📊 投資總覽儀表板":
                     y=df_chart_hist['總資產金額'], 
                     name="資產總金額 (元)",
                     marker_color='rgba(100, 149, 237, 0.6)',
-                    hovertemplate='日期: %{x}<br>總資產: $%{y:,.0f} TWD'
+                    hovertemplate='日期: %{x|%Y-%m-%d}<br>總資產: $%{y:,.0f} TWD'
                 ),
                 secondary_y=False
             )
@@ -583,7 +603,7 @@ if menu == "📊 投資總覽儀表板":
                     mode='lines+markers',
                     line=dict(color='rgb(220, 20, 60)', width=2),
                     marker=dict(size=5),
-                    hovertemplate='日期: %{x}<br>報酬率: %{y:.2f}%'
+                    hovertemplate='日期: %{x|%Y-%m-%d}<br>報酬率: %{y:.2f}%'
                 ),
                 secondary_y=True
             )
@@ -598,7 +618,7 @@ if menu == "📊 投資總覽儀表板":
             fig_combined.update_yaxes(title_text="累積報酬率 (%)", secondary_y=True)
             st.plotly_chart(fig_combined, use_container_width=True)
         else:
-            st.info("💡 暫無歷史趨勢數據可供渲染合併圖表。")
+            st.info("💡 暫無歷史趨勢數據可供轉換渲染。")
 
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
@@ -606,7 +626,7 @@ if menu == "📊 投資總覽儀表板":
     df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
     
     if '偏離度 (Diff)' not in df_portfolio.columns or df_portfolio['偏離度 (Diff)'].isna().all():
-        df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+        df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
 
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
@@ -618,7 +638,7 @@ if menu == "📊 投資總覽儀表板":
             
     df_portfolio['買賣建議'] = df_portfolio.apply(generate_advice, axis=1)
     st.dataframe(df_portfolio[['標的名稱', '核心權重', '單位現價', '持有數量', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議']].style.format({
-        '核心權重': '{:.1%}', '單位現價': '${:,.2f}', '持有數量': '{:.0f}', '當前市值': '${:,.2f}', '目前投資占比': '{:.1%}', '偏離度 (Diff)': '{:+.1%}'
+        '核心權重': '{:.1%}', '單位現價': '${:,.2f}', '持有數量': '{:.0f}', '當前市值': '${:,.2f}', 'कृष्ण占比': '{:.1%}' if 'कृष्ण占比' in df_portfolio.columns else '目前投資占比', '目前投資占比': '{:.1%}', '偏離度 (Diff)': '{:+.1%}'
     }))
 
 # ==========================================
@@ -644,11 +664,9 @@ elif menu == "✍️ 每日資產動態輸入":
                 df_history['日期'] = df_history['日期'].astype(str)
                 
                 df_history_temp = df_history.copy()
-                df_history_temp['日期'] = pd.to_datetime(df_history_temp['日期'])
-                df_history_temp = df_history_temp.sort_values(by="日期")
-                df_history_temp['日期'] = df_history_temp['日期'].dt.strftime("%Y-%m-%d")
+                df_history_temp['開資料日期_temp'] = pd.to_datetime(df_history_temp['日期']).dt.strftime("%Y-%m-%d")
                 
-                df_yesterday = df_history_temp[df_history_temp['日期'] < date_str]
+                df_yesterday = df_history_temp[df_history_temp['開資料日期_temp'] < date_str]
                 if not df_yesterday.empty:
                     last_amount = float(df_yesterday['總資產金額'].iloc[-1])
                     daily_diff = input_amount - last_amount
@@ -666,7 +684,7 @@ elif menu == "✍️ 每日資產動態輸入":
                     "每日報酬率": float(daily_roi)
                 }
                 
-                if date_str in df_history['開時日期'].values if '開時日期' in df_history.columns else date_str in df_history['開時日期'].values if '開時日期' in df_history.columns else date_str in df_history['日期'].values:
+                if date_str in df_history['日期'].values:
                     df_history.loc[df_history['日期'] == date_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
                         input_amount_rounded, daily_diff_rounded, float(daily_roi)
                     ]
