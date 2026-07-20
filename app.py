@@ -170,7 +170,7 @@ if not st.session_state["logged_in"]:
     st.stop()
 
 # ==========================================
-# 🎯 核心清算機：直接讀取試算表「當前市值」公式欄位，並過濾清除 Unnamed
+# 🎯 核心清算機：直接讀取「當前市值」與全新「投資總Beta值」欄位
 # ==========================================
 def calculate_absolute_portfolio_mv(df_portfolio_raw):
     df = df_portfolio_raw.copy()
@@ -179,10 +179,17 @@ def calculate_absolute_portfolio_mv(df_portfolio_raw):
     df['當前市值'] = pd.to_numeric(df['當前市值'], errors='coerce').fillna(0.0)
     total_mv = df['當前市值'].sum()
     
-    return df, total_mv
+    # 🌟 實時抓取雲端試算表內已計算完成的投資總 Beta 值
+    total_beta = 1.00
+    if '投資總Beta, β值' in df.columns:
+        beta_series = pd.to_numeric(df['投資總Beta, β值'], errors='coerce').dropna()
+        if not beta_series.empty:
+            total_beta = beta_series.iloc[0]
+            
+    return df, total_mv, total_beta
 
 # ==========================================
-# 🔄 系統核心引擎：完美安全單向 Upsert（🎯 已移除了覆蓋 portfolio_config 的危險動作）
+# 🔄 系統核心引擎：完美安全單向 Upsert（不覆蓋持股公式）
 # ==========================================
 def execute_system_wide_sync(custom_connection=None):
     try:
@@ -199,8 +206,8 @@ def execute_system_wide_sync(custom_connection=None):
         
         df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
         
-        # 僅讀取清算市值，不改動任何原始欄位
-        df_portfolio_sync, total_mv_calculated = calculate_absolute_portfolio_mv(df_portfolio_sync)
+        # 僅讀取清算市值與 Beta，不改動任何原始欄位
+        df_portfolio_sync, total_mv_calculated, _ = calculate_absolute_portfolio_mv(df_portfolio_sync)
         total_cost_calculated = pd.to_numeric(df_portfolio_sync['投資成本'], errors='coerce').fillna(0.0).sum()
         
         tw_now = get_taiwan_now()
@@ -233,7 +240,7 @@ def execute_system_wide_sync(custom_connection=None):
                     
         df_history_sync = df_history_sync.loc[:, ~df_history_sync.columns.astype(str).str.contains('^Unnamed')]
         
-        # 🎯 終極修正防護：此處只將清算後的數據寫入歷史紀錄表，徹底拔除寫回 portfolio_config 的動作，全面保全 Sheets 公式！
+        # 只將數據寫入歷史紀錄表，徹底保全持股分頁的 Sheets 活體公式
         active_conn.update(worksheet="daily_asset_history", data=df_history_sync)
         return True
     except Exception:
@@ -351,8 +358,8 @@ if menu == "📊 投資總覽儀表板":
         * **當前剩餘本金：${l2_remain:,.0f} TWD**
         """)
         
-    # 直連清算
-    df_portfolio, total_market_value = calculate_absolute_portfolio_mv(df_portfolio)
+    # 直連清算與 Beta 淬取
+    df_portfolio, total_market_value, total_beta = calculate_absolute_portfolio_mv(df_portfolio)
     total_cost = pd.to_numeric(df_portfolio['投資成本'], errors='coerce').fillna(0.0).sum()
     total_profit = total_market_value - total_cost
     total_roi = (total_profit / total_cost) if total_cost > 0 else 0.0
@@ -365,7 +372,7 @@ if menu == "📊 投資總覽儀表板":
         st.info("💡 雲端優化限流版：排程在無人造訪時採用快取機制保護，杜絕觸發 Google 429 錯誤限流配額。")
         
     if sync_clicked:
-        with st.spinner('正在從 Google 試算表直接對齊市值欄位清算...'):
+        with st.spinner('正在從 Google 試算表直接對齊市值與 Beta 欄位清算...'):
             res = execute_system_wide_sync()
             if res:
                 st.success(f"🎉 成功同步！請重新整理網頁！")
@@ -376,17 +383,18 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # 四大 KPI 數據卡片呈現
-    col1, col2, col3, col4 = st.columns(4)
+    # 🎯 五大 KPI 數據卡片呈現（已於質押維持率右側部署投資總 Beta 值卡片）
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("當前總市值 (TWD)", f"${round(total_market_value):,.0f}")
     col2.metric("投資總成本 (TWD)", f"${round(total_cost):,.0f}")
     col3.metric("累積投資獲利 (TWD)", f"${round(total_profit):,.0f}", delta=f"{total_roi*100:.2f}% 報酬率")
     
     maintenance_rate = (total_market_value / total_loan_balance) if total_loan_balance > 0 else 0
     col4.metric("質押維持率", f"{maintenance_rate*100:.2f}%", delta="✅ 水位強韌" if maintenance_rate > 1.6 else "⚠️ 需注意風險")
+    col5.metric("投資總 Beta 值", f"{total_beta:.2f}") # 👈 2位小數精準展現
 
     # ==========================================
-    # 🎯 整合：方案 B 雙柱堆疊對比視覺化圖表區
+    # 📈 核心資產結構與風險水位視覺化
     # ==========================================
     st.markdown("### 📈 核心資產結構與風險水位視覺化")
     col_v1, col_v2 = st.columns(2)
@@ -394,7 +402,6 @@ if menu == "📊 投資總覽儀表板":
     with col_v1:
         fig_stacked = go.Figure()
 
-        # 第一根柱子：資產成分堆疊
         fig_stacked.add_trace(go.Bar(
             name='投資總成本',
             x=['資產結構拆解', '當前總市值總計'],
@@ -414,7 +421,6 @@ if menu == "📊 投資總覽儀表板":
             hovertemplate='累積投資獲利: $%{y:,.0f} TWD<extra></extra>'
         ))
 
-        # 第二根柱子：獨立對比總市值
         fig_stacked.add_trace(go.Bar(
             name='總市值總計',
             x=['資產結構拆解', '當前總市值總計'],
@@ -461,9 +467,9 @@ if menu == "📊 投資總覽儀表板":
         )
         st.plotly_chart(fig_gauge, use_container_width=True)
 
-    # ==========================================
-    # 📊 歷史資產與報酬率歷史趨勢圖
-    # ==========================================
+# ==========================================
+# 📊 歷史資產與報酬率歷史趨勢圖
+# ==========================================
     st.markdown("---")
     st.subheader("📈 智慧數據歷史趨勢儀表板")
     
@@ -547,7 +553,7 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
 
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
@@ -558,7 +564,10 @@ if menu == "📊 投資總覽儀表板":
             return "✅ 權重正常"
             
     df_portfolio['買賣建議'] = df_portfolio.apply(generate_advice, axis=1)
-    st.dataframe(df_portfolio[['標的名稱', '核心權重', '個股現價', '持有數量', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議']].style.format({
+    
+    # 篩選呈現核心直欄，確保新增的運算直欄隱含於後台
+    display_cols = [c for c in ['標的名稱', '核心權重', '個股現價', '持有數量', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議'] if c in df_portfolio.columns]
+    st.dataframe(df_portfolio[display_cols].style.format({
         '核心權重': '{:.1%}', '個股現價': '${:,.2f}', '持有數量': '{:.0f}', '當前市值': '${:,.2f}', '目前投資占比': '{:.1%}', '偏離度 (Diff)': '{:+.1%}'
     }))
 
@@ -671,24 +680,34 @@ elif menu == "⚙️ 投資標的持股管理":
         st.stop()
         
     st.subheader("✏️ 線上編輯持股資訊")
-    st.info("💡 智慧公式保護網已部署：手動編輯修改股數按儲存時，系統會動態依據行號自動重新編譯『個股現價』與『當前市值』的 Google 試算表原始公式，絕對不允許死數字破壞公式網！")
+    st.info("💡 智慧公式保護網已部署：當您手動更動數據按儲存時，程式碼將全自動根據行數，精準還原包括『市值合計』與『Beta 計算』在內的全部活體動態算式回寫雲端，100% 捍衛您的試算表結構！")
     
     df_portfolio_raw = df_portfolio_raw.loc[:, ~df_portfolio_raw.columns.astype(str).str.contains('^Unnamed')]
     edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_safe_editor")
     
     if st.button("💾 儲存並同步至 Google Sheets"):
-        with st.spinner('正在重新編譯並還原 Google 試算表公式...'):
+        with st.spinner('正在安全重新編譯並編織 Google 試算表四大公式鏈...'):
             try:
                 final_upload_df = edited_df.copy()
                 final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
                 final_upload_df['當前市值'] = final_upload_df['當前市值'].astype(str)
                 
+                # 確保新增直欄在資料容器內初始化轉型為字串，方便公式寫入
+                for col_name in ['市值合計', 'Beta, β計算', '投資總Beta, β值']:
+                    if col_name not in final_upload_df.columns:
+                        final_upload_df[col_name] = ""
+                    final_upload_df[col_name] = final_upload_df[col_name].astype(str)
+                
+                # 動態定位 QQQM 的 index 以完美復刻截圖中「總和公式安置在特定行」的配置習慣
+                qqqm_rows = final_upload_df[final_upload_df['Yahoo代號'].astype(str).str.strip().str.upper() == 'QQQM'].index
+                target_sum_row = qqqm_rows[0] + 2 if len(qqqm_rows) > 0 else 5
+                
                 for idx, row in final_upload_df.iterrows():
-                    row_num = idx + 2  # Excel/Sheets 從第 2 列開始是資料
+                    row_num = idx + 2  
                     ticker = str(row.get('Yahoo代號', '')).strip()
                     name = str(row.get('標的名稱', '')).strip()
                     
-                    # 1. 智慧還原個股現價公式
+                    # 1. 還原個股現價 Google 財經公式
                     if "USDTWD" in ticker.upper() or "CURRENCY" in ticker.upper() or "匯率" in name:
                         final_upload_df.at[idx, '個股現價'] = '=GOOGLEFINANCE("CURRENCY:USDTWD")'
                     elif any(k in ticker for k in ['台幣', '現金']) or any(k in name for k in ['台幣', '現金']) or ticker == '' or ticker.lower() == 'nan':
@@ -704,13 +723,24 @@ elif menu == "⚙️ 投資標的持股管理":
                         else:
                             final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
                             
-                    # 2. 🎯 核心大升級：智慧還原當前市值動態公式 (持有數量(D欄) * 個股現價(F欄))
+                    # 2. 還原當前市值動態算式
                     if '台幣現金' in name or ticker == 'TWD':
                         final_upload_df.at[idx, '當前市值'] = f'=D{row_num}'
                     elif 'QQQM' in ticker.upper() or '美金' in name:
-                        final_upload_df.at[idx, '當前市值'] = f'=D{row_num}*F{row_num}*$F$8' # 乘上第8列固定美金匯率
+                        final_upload_df.at[idx, '當前市值'] = f'=D{row_num}*F{row_num}*$F$8'
                     else:
                         final_upload_df.at[idx, '當前市值'] = f'=D{row_num}*F{row_num}'
+                        
+                    # 3. 🎯 終極公式盾牌：完美原樣封裝回寫新加入的 3 個運算直欄
+                    if row_num == target_sum_row:
+                        final_upload_df.at[idx, '市值合計'] = f'=SUM(G$2:G${len(final_upload_df)+1})'
+                        final_upload_df.at[idx, '投資總Beta, β值'] = f'=SUM(J$2:J${len(final_upload_df)+1})'
+                    else:
+                        final_upload_df.at[idx, '市值合計'] = ''
+                        final_upload_df.at[idx, '投資總Beta, β值'] = ''
+                        
+                    # 復刻 J 欄 (Beta, β計算): =(當前市值 / 錨定總市值儲存格) * 個股手動輸入的 Beta 係數
+                    final_upload_df.at[idx, 'Beta, β計算'] = f'=(G{row_num}/H${target_sum_row})*I{row_num}'
                 
                 final_upload_df = final_upload_df.drop(
                     columns=['單位現價', '目前投資占比', '偏離度 (Diff)', '買賣建議'], 
@@ -719,7 +749,7 @@ elif menu == "⚙️ 投資標的持股管理":
                 final_upload_df = final_upload_df.loc[:, ~final_upload_df.columns.astype(str).str.contains('^Unnamed')]
                 
                 conn.update(worksheet="portfolio_config", data=final_upload_df)
-                st.success("🎉 持股與公式防禦任務完美成功！動態公式已成功重構補回！")
+                st.success("🎉 持股與四大全新 Beta 公式直欄防禦任務完美大成功！")
                 st.cache_data.clear()
                 st.rerun()
                 
