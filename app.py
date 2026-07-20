@@ -179,7 +179,6 @@ def calculate_absolute_portfolio_mv(df_portfolio_raw):
     df['當前市值'] = pd.to_numeric(df['當前市值'], errors='coerce').fillna(0.0)
     total_mv = df['當前市值'].sum()
     
-    # 實時安全擷取雲端試算表內已計算完成的投資總 Beta 值
     total_beta = 1.00
     if '投資總Beta, β值' in df.columns:
         beta_series = pd.to_numeric(df['投資總Beta, β值'], errors='coerce').dropna()
@@ -206,7 +205,6 @@ def execute_system_wide_sync(custom_connection=None):
         
         df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
         
-        # 僅讀取清算市值與 Beta，不改動任何持股原始欄位與公式
         df_portfolio_sync, total_mv_calculated, _ = calculate_absolute_portfolio_mv(df_portfolio_sync)
         total_cost_calculated = pd.to_numeric(df_portfolio_sync['投資成本'], errors='coerce').fillna(0.0).sum()
         
@@ -240,7 +238,6 @@ def execute_system_wide_sync(custom_connection=None):
                     
         df_history_sync = df_history_sync.loc[:, ~df_history_sync.columns.astype(str).str.contains('^Unnamed')]
         
-        # 只將數據單向寫入歷史紀錄表，徹底保全持股分頁的 Sheets 活體公式
         active_conn.update(worksheet="daily_asset_history", data=df_history_sync)
         return True
     except Exception:
@@ -383,7 +380,7 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # 🎯 五大 KPI 數據卡片呈現（金額四捨五入整數化、加註 TWD、新增 Beta 欄位）
+    # 🎯 五大 KPI 數據卡片呈現
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("當前總市值 (TWD)", f"${round(total_market_value):,.0f}")
     col2.metric("投資總成本 (TWD)", f"${round(total_cost):,.0f}")
@@ -394,7 +391,7 @@ if menu == "📊 投資總覽儀表板":
     col5.metric("投資總 Beta 值", f"{total_beta:.2f}")
 
     # ==========================================
-    # 🧱 視覺呈現：方案 B 雙柱堆疊對比圖
+    # 📈 核心資產結構與風險水位視覺化
     # ==========================================
     st.markdown("### 📈 核心資產結構與風險水位視覺化")
     col_v1, col_v2 = st.columns(2)
@@ -434,27 +431,26 @@ if menu == "📊 投資總覽儀表板":
         ))
 
         fig_stacked.update_layout(
-            title={'text': "🧱 資產組合組合累積對比圖 (TWD)", 'y': 0.9, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
-            height=320, 
-            margin=dict(t=60, b=30, l=40, r=40),
+            title={'text': "🧱 資產組合組合累積對比圖 (TWD)", 'y': 0.92, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
+            height=360, 
+            # 🎯 修正1：將下邊距 b 從 30 擴大調寬至 80，釋放底部標籤空間
+            margin=dict(t=60, b=80, l=40, r=40),
             barmode='stack', 
             showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+            # 🎯 修正1：重構圖例定位，yanchor 改為 top、y 位置微調至 -0.25，完美拉開與 X 軸文字的距離
+            legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5),
             plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
             yaxis=dict(showgrid=True, gridcolor='rgba(200,200,200,0.15)')
         )
         st.plotly_chart(fig_stacked, use_container_width=True)
 
     with col_v2:
-        # ==========================================
-        # 🎯 核心修正：破除顏色倒置錯覺的智慧動態變色風險警示盤
-        # ==========================================
         if maintenance_rate * 100 < 160:
-            gauge_bar_color = "#e74c3c"  # 紅色（追繳危險水位）
+            gauge_bar_color = "#e74c3c"  
         elif maintenance_rate * 100 < 190:
-            gauge_bar_color = "#f1c40f"  # 黃色（緊鄰警戒線）
+            gauge_bar_color = "#f1c40f"  
         else:
-            gauge_bar_color = "#2ecc71"  # 翡翠綠（絕對安全健康色）
+            gauge_bar_color = "#2ecc71"  
 
         current_rate_pct = maintenance_rate * 100 if maintenance_rate <= 100 else maintenance_rate
 
@@ -464,14 +460,14 @@ if menu == "📊 投資總覽儀表板":
             domain={'x': [0, 1], 'y': [0, 1]},
             gauge={
                 'axis': {'range': [0, 600], 'tickwidth': 1, 'tickcolor': "#888888", 'tickformat': '.0f'},
-                'bar': {'color': gauge_bar_color, 'thickness': 0.18}, # 亮色延伸進度條
+                'bar': {'color': gauge_bar_color, 'thickness': 0.18}, 
                 'bgcolor': "rgba(0,0,0,0)", 
                 'borderwidth': 1, 
                 'bordercolor': "rgba(255,255,255,0.1)",
                 'steps': [
-                    {'range': [0, 160], 'color': 'rgba(231, 76, 60, 0.06)'},   # 極淡暗紅
-                    {'range': [160, 190], 'color': 'rgba(241, 196, 15, 0.06)'}, # 極淡暗黃
-                    {'range': [190, 600], 'color': 'rgba(255, 255, 255, 0.03)'} # 低調深色暗底
+                    {'range': [0, 160], 'color': 'rgba(231, 76, 60, 0.06)'},   
+                    {'range': [160, 190], 'color': 'rgba(241, 196, 15, 0.06)'}, 
+                    {'range': [190, 600], 'color': 'rgba(255, 255, 255, 0.03)'} 
                 ],
                 'threshold': {
                     'line': {'color': "#e74c3c", 'width': 3}, 
@@ -481,8 +477,12 @@ if menu == "📊 投資總覽儀表板":
             }
         ))
         fig_gauge.update_layout(
-            title={'text': "🛡️ 質押信用維持率風險警示盤", 'y': 0.9, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
-            height=320, margin=dict(t=60, b=30, l=40, r=40), paper_bgcolor='rgba(0,0,0,0)'
+            # 🎯 修正2：將標題 y 位置拉高到 0.96，使其更往頂部靠攏
+            title={'text': "🛡️ 質押信用維持率風險警示盤", 'y': 0.96, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
+            height=360, 
+            # 🎯 修正2：將上邊距 t 從 60 大幅加高至 95，壓低儀表盤圓弧線，與標題及 300 數字拉開完美空隙
+            margin=dict(t=95, b=30, l=40, r=40), 
+            paper_bgcolor='rgba(0,0,0,0)'
         )
         st.plotly_chart(fig_gauge, use_container_width=True)
 
@@ -519,7 +519,7 @@ if menu == "📊 投資總覽儀表板":
         st.markdown("##### 📊 2. 資產規模與每日報酬率歷史趨勢合併圖")
         if not df_history.empty:
             df_chart_hist = df_history.copy()
-            df_chart_hist['開設日期_parsed'] = pd.to_datetime(df_chart_hist['開時日期'] if '開時日期' in df_chart_hist.columns else df_chart_hist['日期'])
+            df_chart_hist['開設日期_parsed'] = pd.to_datetime(df_chart_hist['開時日期'] if '開時日期' in df_chart_hist.columns else df_chart_hist['開時日期'] if '開時日期' in df_chart_hist.columns else df_chart_hist['日期'])
             df_chart_hist = df_chart_hist.sort_values(by='開設日期_parsed')
             tw_now_chart = get_taiwan_now()
             
@@ -656,7 +656,7 @@ elif menu == "✍️ 每日資產動態輸入":
         )
         
         df_display = df_history.copy()
-        df_display['開資料日期_parsed'] = pd.to_datetime(df_display['日期'])
+        df_display['開資料日期_parsed'] = pd.to_datetime(df_display['開資料日期'] if '開資料日期' in df_display.columns else df_display['日期'])
         df_display = df_display.sort_values(by="開資料日期_parsed", ascending=False)
         tw_now_display = get_taiwan_now()
         
@@ -712,13 +712,11 @@ elif menu == "⚙️ 投資標的持股管理":
                 final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
                 final_upload_df['當前市值'] = final_upload_df['當前市值'].astype(str)
                 
-                # 確保新增直欄在資料容器內初始化轉型為字串，方便公式寫入
                 for col_name in ['市值合計', 'Beta, β計算', '投資總Beta, β值']:
                     if col_name not in final_upload_df.columns:
                         final_upload_df[col_name] = ""
                     final_upload_df[col_name] = final_upload_df[col_name].astype(str)
                 
-                # 動態定位 QQQM 的 index 作為總和公式錨定點
                 qqqm_rows = final_upload_df[final_upload_df['Yahoo代號'].astype(str).str.strip().str.upper() == 'QQQM'].index
                 target_sum_row = qqqm_rows[0] + 2 if len(qqqm_rows) > 0 else 5
                 
@@ -727,7 +725,6 @@ elif menu == "⚙️ 投資標的持股管理":
                     ticker = str(row.get('Yahoo代號', '')).strip()
                     name = str(row.get('標的名稱', '')).strip()
                     
-                    # 1. 還原個股現價 Google 財經公式
                     if "USDTWD" in ticker.upper() or "CURRENCY" in ticker.upper() or "匯率" in name:
                         final_upload_df.at[idx, '個股現價'] = '=GOOGLEFINANCE("CURRENCY:USDTWD")'
                     elif any(k in ticker for k in ['台幣', '現金']) or any(k in name for k in ['台幣', '現金']) or ticker == '' or ticker.lower() == 'nan':
@@ -743,7 +740,6 @@ elif menu == "⚙️ 投資標的持股管理":
                         else:
                             final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
                             
-                    # 2. 還原當前市值動態算式
                     if '台幣現金' in name or ticker == 'TWD':
                         final_upload_df.at[idx, '當前市值'] = f'=D{row_num}'
                     elif 'QQQM' in ticker.upper() or '美金' in name:
@@ -751,7 +747,6 @@ elif menu == "⚙️ 投資標的持股管理":
                     else:
                         final_upload_df.at[idx, '當前市值'] = f'=D{row_num}*F{row_num}'
                         
-                    # 3. 完美原樣封裝回寫新加入的 3 個運算直欄
                     if row_num == target_sum_row:
                         final_upload_df.at[idx, '市值合計'] = f'=SUM(G$2:G${len(final_upload_df)+1})'
                         final_upload_df.at[idx, '投資總Beta, β值'] = f'=SUM(J$2:J${len(final_upload_df)+1})'
@@ -759,7 +754,6 @@ elif menu == "⚙️ 投資標的持股管理":
                         final_upload_df.at[idx, '市值合計'] = ''
                         final_upload_df.at[idx, '投資總Beta, β值'] = ''
                         
-                    # 復刻 J 欄 (Beta, β計算)
                     final_upload_df.at[idx, 'Beta, β計算'] = f'=(G{row_num}/H${target_sum_row})*I{row_num}'
                 
                 final_upload_df = final_upload_df.drop(
