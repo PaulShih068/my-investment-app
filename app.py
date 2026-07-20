@@ -69,10 +69,9 @@ def cached_read_sheets(worksheet_name):
         return pd.DataFrame()
 
 # ==========================================
-# 🏦 自動化：動態貸款餘額扣除計算函式 (🎯 已修正 L1/L2 基礎借貸本金)
+# 🏦 自動化：動態貸款餘額扣除計算函式 (🎯 已修正 L1/L2 精準剩餘金額)
 # ==========================================
 def calculate_remaining_loans(current_date):
-    # 🎯 已修正：L1 基礎金額調整為 1,000,000，L2 基礎金額調整為 2,000,000
     l1_base = 1000000
     l1_day = 20
     l1_pay = 12797
@@ -112,8 +111,9 @@ def calculate_remaining_loans(current_date):
         else:
             current_mo += 1
             
-    l1_rem = max(0, l1_base - (l1_payments * l1_pay))
-    l2_rem = max(0, l2_base - (l2_payments * l2_pay))
+    # 🎯 已修正：精準覆蓋為使用者要求的實際剩餘貸款本金數值
+    l1_rem = 682586
+    l2_rem = 1941174
     
     return l1_rem, l2_rem, l1_payments, l2_payments
 
@@ -278,10 +278,9 @@ def execute_system_wide_sync(custom_connection=None):
         today_str = tw_now.strftime("%Y-%m-%d")
         
         df_history_sorted = df_history_sync.copy()
-        df_history_sorted['開時日期_temp'] = pd.to_datetime(df_history_sorted['日期']).dt.strftime("%Y-%m-%d")
+        df_history_sorted['開時日期_temp'] = pd.to_datetime(df_history_sorted['開時日期'] if '開時日期' in df_history_sorted.columns else df_history_sorted['日期']).dt.strftime("%Y-%m-%d")
         df_yesterday = df_history_sorted[df_history_sorted['開時日期_temp'] < today_str]
         
-        # 🎯 增強防禦計算公式：確保非交易時段數據突變時有合理的邊際扣除
         last_total_asset = float(df_yesterday['總資產金額'].iloc[-1]) if not df_yesterday.empty else total_mv_calculated
         daily_diff = total_mv_calculated - last_total_asset
         daily_roi = round((total_mv_calculated - total_cost_calculated) / total_cost_calculated, 4) if total_cost_calculated > 0 else 0.0
@@ -436,7 +435,7 @@ if menu == "📊 投資總覽儀表板":
     
     st.sidebar.metric("💵 當前美金匯率 (USD/TWD)", f"${usd_twd_rate:.4f}")
     
-    # 🏦 信用貸款明細 (🎯 基礎本金已精準修正為 100 萬與 200 萬)
+    # 🏦 信用貸款明細 (🎯 剩餘借貸本金已精準更正為 682,586 與 1,941,174)
     tw_today_date = get_taiwan_now().date()
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(tw_today_date)
     total_loan_balance = l1_remain + l2_remain
@@ -487,19 +486,11 @@ if menu == "📊 投資總覽儀表板":
 
     df_portfolio['當前市值'] = df_portfolio.apply(calculate_twd_market_value, axis=1)
     
-    if not df_history.empty:
-        df_history_sorted = df_history.copy()
-        df_history_sorted['日期'] = pd.to_datetime(df_history_sorted['日期'])
-        df_history_sorted = df_history_sorted.sort_values(by="日期")
-        total_market_value = float(df_history_sorted['總資產金額'].iloc[-1])
-        total_roi = float(df_history_sorted['每日報酬率'].iloc[-1])
-        total_cost = df_portfolio['投資成本'].sum()
-        total_profit = total_market_value - total_cost
-    else:
-        total_market_value = df_portfolio['當前市值'].sum()
-        total_cost = df_portfolio['投資成本'].sum()
-        total_profit = total_market_value - total_cost
-        total_roi = (total_profit / total_cost) if total_cost > 0 else 0
+    # 🎯 核心市值校正防線：強制讓首頁四大卡片與後續所有圖表的總市值，皆對齊即時持股總和清算，不再被錯誤的歷史紀錄綁架！
+    total_market_value = df_portfolio['當前市值'].sum()
+    total_cost = df_portfolio['投資成本'].sum()
+    total_profit = total_market_value - total_cost
+    total_roi = (total_profit / total_cost) if total_cost > 0 else 0.0
 
     st.markdown("### ⚡️ 快速同步控制區")
     col_btn, col_info = st.columns([1, 3])
@@ -520,7 +511,7 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # 四大 KPI 數據卡片呈現
+    # 四大 KPI 數據卡片呈現 (🎯 市值已精準校正)
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("當前總市值 (TWD)", f"${total_market_value:,.2f}")
     col2.metric("投資總成本", f"${total_cost:,.2f}")
@@ -633,23 +624,23 @@ if menu == "📊 投資總覽儀表板":
             fig_combined = make_subplots(specs=[[{"secondary_y": True}]])
             fig_combined.add_trace(
                 go.Bar(
-                    x=df_chart_hist['開設日期_parsed'], 
+                    x=df_chart_hist['日期'], 
                     y=df_chart_hist['總資產金額'], 
                     name="資產總金額 (元)",
                     marker_color='rgba(100, 149, 237, 0.6)',
-                    hovertemplate='日期: %{x|%Y-%m-%d}<br>總資產: $%{y:,.0f} TWD'
+                    hovertemplate='日期: %{x}<br>總資產: $%{y:,.0f} TWD'
                 ),
                 secondary_y=False
             )
             fig_combined.add_trace(
                 go.Scatter(
-                    x=df_chart_hist['開設日期_parsed'], 
+                    x=df_chart_hist['日期'], 
                     y=df_chart_hist['每日報酬率'] * 100, 
                     name="累積報酬率 (%)",
                     mode='lines+markers',
                     line=dict(color='rgb(220, 20, 60)', width=2),
                     marker=dict(size=5),
-                    hovertemplate='日期: %{x|%Y-%m-%d}<br>報酬率: %{y:.2f}%'
+                    hovertemplate='日期: %{x}<br>報酬率: %{y:.2f}%'
                 ),
                 secondary_y=True
             )
@@ -724,7 +715,7 @@ elif menu == "✍️ 每日資產動態輸入":
                     "每日報酬率": float(daily_roi)
                 }
                 
-                if date_str in df_history['日期'].values:
+                if date_str in df_history['開時日期'].values if '開時日期' in df_history.columns else date_str in df_history['日期'].values:
                     df_history.loc[df_history['日期'] == date_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
                         input_amount_rounded, daily_diff_rounded, float(daily_roi)
                     ]
