@@ -59,12 +59,11 @@ def get_taiwan_now():
     return utc_now.astimezone(taiwan_tz)
 
 # ==========================================
-# 🛡️ 流量防護盾大改版：快取時間歸零 (🎯 已修正為完全即時直連)
+# 🛡️ 流量防護盾：快取時間歸零（完全即時直連）
 # ==========================================
-@st.cache_data(ttl=0)  # 👈 參數調整：ttl 設為 0，網頁一重整立即釋放舊記憶
+@st.cache_data(ttl=0)  
 def cached_read_sheets(worksheet_name):
     try:
-        # 🎯 強制指定 ttl=0，每次重新整理都必定穿透至 Google Sheets 抓取最新值
         df = conn.read(worksheet=worksheet_name, ttl=0)
         if df is not None and not df.empty:
             df = df.loc[:, ~df.columns.astype(str).str.contains('^Unnamed')]
@@ -198,7 +197,7 @@ def execute_system_wide_sync(custom_connection=None):
         df_history_sync = df_history_sync.loc[:, ~df_history_sync.columns.astype(str).str.contains('^Unnamed')]
         df_portfolio_sync = df_portfolio_sync.loc[:, ~df_portfolio_sync.columns.astype(str).str.contains('^Unnamed')]
         
-        df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
+        df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
         
         df_portfolio_sync, total_mv_calculated = calculate_absolute_portfolio_mv(df_portfolio_sync)
         total_cost_calculated = pd.to_numeric(df_portfolio_sync['投資成本'], errors='coerce').fillna(0.0).sum()
@@ -378,7 +377,7 @@ if menu == "📊 投資總覽儀表板":
         * **當前剩餘本金：${l2_remain:,.0f} TWD**
         """)
         
-    # 🎯 直連清算
+    # 直連市值清算
     df_portfolio, total_market_value = calculate_absolute_portfolio_mv(df_portfolio)
     total_cost = pd.to_numeric(df_portfolio['投資成本'], errors='coerce').fillna(0.0).sum()
     total_profit = total_market_value - total_cost
@@ -403,11 +402,11 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # 四大 KPI 數據卡片呈現
+    # 四大 KPI 數據卡片呈現（🎯 已完成四捨五入整數化與 TWD 標籤加註）
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("當前總市值 (TWD)", f"${total_market_value:,.2f}")
-    col2.metric("投資總成本", f"${total_cost:,.2f}")
-    col3.metric("累積投資獲利", f"${total_profit:,.2f}", delta=f"{total_roi*100:.2f}% 報酬率")
+    col1.metric("當前總市值 (TWD)", f"${round(total_market_value):,.0f}")
+    col2.metric("投資總成本 (TWD)", f"${round(total_cost):,.0f}")
+    col3.metric("累積投資獲利 (TWD)", f"${round(total_profit):,.0f}", delta=f"{total_roi*100:.2f}% 報酬率")
     
     maintenance_rate = (total_market_value / total_loan_balance) if total_loan_balance > 0 else 0
     col4.metric("質押維持率", f"{maintenance_rate*100:.2f}%", delta="✅ 水位強韌" if maintenance_rate > 1.6 else "⚠️ 需注意風險")
@@ -629,24 +628,24 @@ elif menu == "✍️ 每日資產動態輸入":
         )
         
         df_display = df_history.copy()
-        df_display['日期'] = pd.to_datetime(df_display['日期'])
-        df_display = df_display.sort_values(by="日期", ascending=False)
+        df_display['開資料日期_parsed'] = pd.to_datetime(df_display['日期'])
+        df_display = df_display.sort_values(by="開資料日期_parsed", ascending=False)
         tw_now_display = get_taiwan_now()
         
         if search_option == "近 7 天":
             start_date = tw_now_display - timedelta(days=7)
-            df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date.date())]
+            df_display = df_display[df_display['開資料日期_parsed'] >= pd.to_datetime(start_date.date())]
         elif search_option == "近 30 天":
             start_date = tw_now_display - timedelta(days=30)
-            df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date.date())]
+            df_display = df_display[df_display['開資料日期_parsed'] >= pd.to_datetime(start_date.date())]
         elif search_option == "近 180 天":
             start_date = tw_now_display - timedelta(days=180)
-            df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date.date())]
+            df_display = df_display[df_display['開資料日期_parsed'] >= pd.to_datetime(start_date.date())]
         elif search_option == "今年以來 (YTD)":
             start_date = datetime(tw_now_display.year, 1, 1)
-            df_display = df_display[df_display['日期'] >= pd.to_datetime(start_date)]
+            df_display = df_display[df_display['開資料日期_parsed'] >= pd.to_datetime(start_date)]
             
-        df_display['日期'] = df_display['日期'].dt.strftime("%Y-%m-%d")
+        df_display['日期'] = df_display['開資料日期_parsed'].dt.strftime("%Y-%m-%d")
         df_display['總資產金額'] = pd.to_numeric(df_display['總資產金額'], errors='coerce').fillna(0).round().astype(int)
         df_display['每日增額'] = pd.to_numeric(df_display['每日增額'], errors='coerce').fillna(0).round().astype(int)
         
@@ -658,7 +657,7 @@ elif menu == "✍️ 每日資產動態輸入":
             current_page = st.number_input(f"頁碼 (共 {total_pages} 頁)", min_value=1, max_value=total_pages, value=1, step=1)
             start_idx = (current_page - 1) * rows_per_page
             end_idx = start_idx + rows_per_page
-            st.dataframe(df_display.iloc[start_idx:end_idx], use_container_width=True)
+            st.dataframe(df_display[['日期', '總資產金額', '每日增額', '每日報酬率']].iloc[start_idx:end_idx], use_container_width=True)
 
 # ==========================================
 # 功能三：⚙️ 投資標的持股管理
