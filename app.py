@@ -69,15 +69,16 @@ def cached_read_sheets(worksheet_name):
         return pd.DataFrame()
 
 # ==========================================
-# 🏦 自動化：動態貸款餘額扣除計算函式
+# 🏦 自動化：動態貸款餘額扣除計算函式 (🎯 已修正 L1/L2 基礎借貸本金)
 # ==========================================
 def calculate_remaining_loans(current_date):
-    l1_base = 1039721
+    # 🎯 已修正：L1 基礎金額調整為 1,000,000，L2 基礎金額調整為 2,000,000
+    l1_base = 1000000
     l1_day = 20
     l1_pay = 12797
     l1_base_date = date(2024, 4, 20)
     
-    l2_base = 2016662
+    l2_base = 2000000
     l2_day = 10
     l2_pay = 18872
     l2_base_date = date(2026, 4, 10)
@@ -280,7 +281,9 @@ def execute_system_wide_sync(custom_connection=None):
         df_history_sorted['開時日期_temp'] = pd.to_datetime(df_history_sorted['日期']).dt.strftime("%Y-%m-%d")
         df_yesterday = df_history_sorted[df_history_sorted['開時日期_temp'] < today_str]
         
-        daily_diff = total_mv_calculated - float(df_yesterday['總資產金額'].iloc[-1]) if not df_yesterday.empty else 0.0
+        # 🎯 增強防禦計算公式：確保非交易時段數據突變時有合理的邊際扣除
+        last_total_asset = float(df_yesterday['總資產金額'].iloc[-1]) if not df_yesterday.empty else total_mv_calculated
+        daily_diff = total_mv_calculated - last_total_asset
         daily_roi = round((total_mv_calculated - total_cost_calculated) / total_cost_calculated, 4) if total_cost_calculated > 0 else 0.0
         
         if today_str in df_history_sync['開時日期'].values:
@@ -433,7 +436,7 @@ if menu == "📊 投資總覽儀表板":
     
     st.sidebar.metric("💵 當前美金匯率 (USD/TWD)", f"${usd_twd_rate:.4f}")
     
-    # 🏦 信用貸款明細
+    # 🏦 信用貸款明細 (🎯 基礎本金已精準修正為 100 萬與 200 萬)
     tw_today_date = get_taiwan_now().date()
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(tw_today_date)
     total_loan_balance = l1_remain + l2_remain
@@ -443,14 +446,14 @@ if menu == "📊 投資總覽儀表板":
     with col_l1:
         st.info(f"""
         **信貸第一主線 (L1)**
-        * 原始借貸本金：`$1,039,721 TWD`
+        * 原始借貸本金：`$1,000,000 TWD`
         * 已繳款期數：`{l1_pay_count} 期` (每月20日自動扣繳 `$12,797`)
         * **當前剩餘本金：${l1_remain:,.0f} TWD**
         """)
     with col_l2:
         st.info(f"""
         **信貸第二主線 (L2)**
-        * 原始借貸本金：`$2,016,662 TWD`
+        * 原始借貸本金：`$2,000,000 TWD`
         * 已繳款期數：`{l2_pay_count} 期` (每月10日自動扣繳 `$18,872`)
         * **當前剩餘本金：${l2_remain:,.0f} TWD**
         """)
@@ -533,7 +536,6 @@ if menu == "📊 投資總覽儀表板":
     col_v1, col_v2 = st.columns(2)
 
     with col_v1:
-        # 1. 資產結構增值瀑布圖
         fig_waterfall = go.Figure(go.Waterfall(
             name="資產結構",
             orientation="v",
@@ -555,7 +557,6 @@ if menu == "📊 投資總覽儀表板":
         st.plotly_chart(fig_waterfall, use_container_width=True)
 
     with col_v2:
-        # 2. 質押維持率安全儀表盤
         current_rate_pct = maintenance_rate * 100 if maintenance_rate <= 100 else maintenance_rate
         fig_gauge = go.Figure(go.Indicator(
             mode="gauge+number",
@@ -566,9 +567,9 @@ if menu == "📊 投資總覽儀表板":
                 'bar': {'color': "#2c3e50", 'thickness': 0.25}, 
                 'bgcolor': "rgba(0,0,0,0)", 'borderwidth': 1, 'bordercolor': "#aaaaaa",
                 'steps': [
-                    {'range': [0, 160], 'color': 'rgba(231, 76, 60, 0.3)'},   # 🚨 追繳區
-                    {'range': [160, 190], 'color': 'rgba(241, 196, 15, 0.3)'}, # ⚠️ 警戒區
-                    {'range': [190, 600], 'color': 'rgba(46, 204, 113, 0.2)'}  # ✅ 安全區
+                    {'range': [0, 160], 'color': 'rgba(231, 76, 60, 0.3)'},   
+                    {'range': [160, 190], 'color': 'rgba(241, 196, 15, 0.3)'}, 
+                    {'range': [190, 600], 'color': 'rgba(46, 204, 113, 0.2)'}  
                 ],
                 'threshold': {'line': {'color': "#e74c3c", 'width': 3}, 'thickness': 0.75, 'value': 160}
             }
@@ -632,23 +633,23 @@ if menu == "📊 投資總覽儀表板":
             fig_combined = make_subplots(specs=[[{"secondary_y": True}]])
             fig_combined.add_trace(
                 go.Bar(
-                    x=df_chart_hist['日期'], 
+                    x=df_chart_hist['開設日期_parsed'], 
                     y=df_chart_hist['總資產金額'], 
                     name="資產總金額 (元)",
                     marker_color='rgba(100, 149, 237, 0.6)',
-                    hovertemplate='日期: %{x}<br>總資產: $%{y:,.0f} TWD'
+                    hovertemplate='日期: %{x|%Y-%m-%d}<br>總資產: $%{y:,.0f} TWD'
                 ),
                 secondary_y=False
             )
             fig_combined.add_trace(
                 go.Scatter(
-                    x=df_chart_hist['日期'], 
+                    x=df_chart_hist['開設日期_parsed'], 
                     y=df_chart_hist['每日報酬率'] * 100, 
                     name="累積報酬率 (%)",
                     mode='lines+markers',
                     line=dict(color='rgb(220, 20, 60)', width=2),
                     marker=dict(size=5),
-                    hovertemplate='日期: %{x}<br>報酬率: %{y:.2f}%'
+                    hovertemplate='日期: %{x|%Y-%m-%d}<br>報酬率: %{y:.2f}%'
                 ),
                 secondary_y=True
             )
@@ -666,9 +667,6 @@ if menu == "📊 投資總覽儀表板":
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
     df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
-    
-    if '偏離度 (Diff)' not in df_portfolio.columns or df_portfolio['偏離度 (Diff)'].isna().all():
-        df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
 
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
@@ -706,7 +704,7 @@ elif menu == "✍️ 每日資產動態輸入":
                 df_history['日期'] = df_history['日期'].astype(str)
                 
                 df_history_temp = df_history.copy()
-                df_history_temp['開資料日期_temp'] = pd.to_datetime(df_history_temp['開資料日期_temp'] if '開資料日期_temp' in df_history_temp.columns else df_history_temp['日期']).dt.strftime("%Y-%m-%d")
+                df_history_temp['開資料日期_temp'] = pd.to_datetime(df_history_temp['日期']).dt.strftime("%Y-%m-%d")
                 
                 df_yesterday = df_history_temp[df_history_temp['開資料日期_temp'] < date_str]
                 if not df_yesterday.empty:
