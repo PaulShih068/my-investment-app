@@ -59,7 +59,7 @@ def get_taiwan_now():
     return utc_now.astimezone(taiwan_tz)
 
 # ==========================================
-# 🛡️ 流量防護盾：實體化全域快取函數
+# 🛡️ 流量防護盾：實體化全域快取函數 (一般資料呈現用)
 # ==========================================
 @st.cache_data(ttl=120)  
 def cached_read_sheets(worksheet_name):
@@ -67,6 +67,21 @@ def cached_read_sheets(worksheet_name):
         return conn.read(worksheet=worksheet_name, ttl=120)
     except Exception as e:
         return pd.DataFrame()
+
+# ==========================================
+# 🔒 登入專用：直連雲端且附帶自動重試機制的認證讀取函數
+# ==========================================
+def fetch_credentials_live():
+    """跳過快取，直連 Google Sheets 讀取帳密，遇錯自動重試 3 次"""
+    for attempt in range(3):
+        try:
+            # 使用 ttl=0 強制直連雲端獲取最新鮮數據，防範重整暫時失效
+            df = conn.read(worksheet="user_credentials", ttl=0)
+            if df is not None and not df.empty:
+                return df
+        except Exception:
+            time_module.sleep(0.5) # 遇錯稍微暫停 0.5 秒後重試
+    return pd.DataFrame()
 
 # ==========================================
 # 🏦 自動化：動態貸款餘額扣除計算函式
@@ -117,7 +132,7 @@ def calculate_remaining_loans(current_date):
     return l1_rem, l2_rem, l1_payments, l2_payments
 
 # ==========================================
-# 🔒 系統安全登入驗證機制
+# 🔒 系統安全登入驗證機制 (🎯 已修正重整讀取失敗問題)
 # ==========================================
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
@@ -133,8 +148,10 @@ if not st.session_state["logged_in"]:
             submit_login = st.form_submit_button("🚀 安全登入", use_container_width=True)
             
             if submit_login:
-                try:
-                    df_creds = cached_read_sheets("user_credentials")
+                with st.spinner("正在安全連線至驗證伺服器..."):
+                    # 🎯 改採帶有防禦機制的直連函數
+                    df_creds = fetch_credentials_live()
+                    
                     if not df_creds.empty:
                         df_creds = df_creds.dropna(subset=["帳號", "密碼"])
                         match = df_creds[
@@ -149,21 +166,17 @@ if not st.session_state["logged_in"]:
                         else:
                             st.error("❌ 帳號或密碼錯誤，請重新確認！")
                     else:
-                        st.error("❌ 無法讀取認證資料表。")
-                except Exception as e:
-                    st.error(f"❌ 驗證失敗。 錯誤: {e}")
+                        st.error("❌ 無法讀取認證資料表。請確認網路連線或稍後重試。")
     st.stop()
 
 # ==========================================
-# 🛡️ 核心大修復：全自動表格清算計算機 (100% 依據試算表原始欄位)
+# 🛡️ 核心清算機：純持股乘積加總計算機
 # ==========================================
 def calculate_absolute_portfolio_mv(df_portfolio_raw):
-    """精準解析原始表單欄位，執行 數量 x 個股現價 相乘相加"""
     df = df_portfolio_raw.copy()
     df['標的名稱_strip'] = df['標的名稱'].fillna('').astype(str).str.strip()
     df['Yahoo代號_strip'] = df['Yahoo代號'].fillna('').astype(str).str.strip()
     
-    # 1. 動態鎖定美金現價這列的數值作為基礎美金匯率基準
     usd_rate_row = df[df['標的名稱_strip'] == '美金現金']
     if not usd_rate_row.empty:
         usd_rate = pd.to_numeric(usd_rate_row['個股現價'].iloc[0], errors='coerce')
@@ -172,11 +185,9 @@ def calculate_absolute_portfolio_mv(df_portfolio_raw):
     else:
         usd_rate = 32.3381
         
-    # 2. 轉換數值型態防止字串干擾
     df['持有數量'] = pd.to_numeric(df['持有數量'], errors='coerce').fillna(0.0)
     df['個股現價'] = pd.to_numeric(df['個股現價'], errors='coerce').fillna(0.0)
     
-    # 3. 執行精準單列乘積清算
     def run_row_clearance(row):
         name = row['標的名稱_strip']
         ticker = row['Yahoo代號_strip']
@@ -184,11 +195,11 @@ def calculate_absolute_portfolio_mv(df_portfolio_raw):
         price = row['個股現價']
         
         if '台幣現金' in name or ticker == 'TWD':
-            return qty # 台幣現金直接等於持有本金，剔除錯誤現價乘積
+            return qty 
         elif 'QQQM' in ticker.upper() or '美金' in name:
-            return qty * price * usd_rate # 美金標的加乘匯率
+            return qty * price * usd_rate 
         else:
-            return qty * price # 標準台股標的直接相乘
+            return qty * price 
             
     df['當前市值'] = df.apply(run_row_clearance, axis=1)
     return df, df['當前市值'].sum()
@@ -208,7 +219,6 @@ def execute_system_wide_sync(custom_connection=None):
         
         df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
         
-        # 🎯 採用你指定的全新清算機制計算即時總市值
         df_portfolio_sync, total_mv_calculated = calculate_absolute_portfolio_mv(df_portfolio_sync)
         total_cost_calculated = pd.to_numeric(df_portfolio_sync['投資成本'], errors='coerce').fillna(0.0).sum()
         
@@ -240,7 +250,6 @@ def execute_system_wide_sync(custom_connection=None):
         if '開時日期' in df_history_sync.columns:
             df_history_sync = df_history_sync.drop(columns=['開時日期'])
 
-        # 公式智慧還原再注入防護網
         final_upload_df = df_portfolio_sync.copy()
         final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
         
@@ -367,7 +376,7 @@ if menu == "📊 投資總覽儀表板":
     df_history = df_history.dropna(subset=["日期"])
     df_portfolio = df_portfolio.dropna(subset=["標的名稱"])
     
-    # 🏦 信用貸款明細 
+    # 🏦 信用貸款明細
     tw_today_date = get_taiwan_now().date()
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(tw_today_date)
     total_loan_balance = l1_remain + l2_remain
@@ -389,7 +398,6 @@ if menu == "📊 投資總覽儀表板":
         * **當前剩餘本金：${l2_remain:,.0f} TWD**
         """)
         
-    # 🎯 核心大修正：UI 渲染數據全數改用全新定義的「純持股對齊清算公式」
     df_portfolio, total_market_value = calculate_absolute_portfolio_mv(df_portfolio)
     total_cost = pd.to_numeric(df_portfolio['投資成本'], errors='coerce').fillna(0.0).sum()
     total_profit = total_market_value - total_cost
@@ -414,7 +422,7 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # 四大 KPI 數據卡片呈現 (🎯 完美校正對齊)
+    # 四大 KPI 數據卡片呈現
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("當前總市值 (TWD)", f"${total_market_value:,.2f}")
     col2.metric("投資總成本", f"${total_cost:,.2f}")
@@ -424,7 +432,7 @@ if menu == "📊 投資總覽儀表板":
     col4.metric("質押維持率", f"{maintenance_rate*100:.2f}%", delta="✅ 水位強韌" if maintenance_rate > 1.6 else "⚠️ 需注意風險")
 
     # ==========================================
-    # 🎯 KPI 核心指標深度視覺化圖表區 (瀑布圖 & 風險指針盤)
+    # KPI 核心指標深度視覺化圖表區 (瀑布圖 & 風險指針盤)
     # ==========================================
     st.markdown("### 📈 核心資產結構與風險水位視覺化")
     col_v1, col_v2 = st.columns(2)
@@ -441,7 +449,7 @@ if menu == "📊 投資總覽儀表板":
             connector={"line": {"color": "rgba(100, 100, 100, 0.5)", "width": 1}},
             decreasing={"marker": {"color": "#FF6384"}}, 
             increasing={"marker": {"color": "#2ecc71"}}, 
-            totals={"marker": {"color": "#3498db"}}     
+            totals={"marker": {"color": "#3498db"}    } 
         ))
         fig_waterfall.update_layout(
             title={'text': "🎯 資產價值階梯增長圖 (TWD)", 'y': 0.9, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
@@ -495,7 +503,7 @@ if menu == "📊 投資總覽儀表板":
         fig_pie = px.pie(
             df_pie_data, 
             values='當前市值', 
-            names='標的名稱',
+            names='標的名稱_strip',
             hole=0.4,
             color_discrete_sequence=px.colors.qualitative.Pastel
         )
@@ -507,7 +515,7 @@ if menu == "📊 投資總覽儀表板":
         st.markdown("##### 📊 2. 資產規模與每日報酬率歷史趨勢合併圖")
         if not df_history.empty:
             df_chart_hist = df_history.copy()
-            df_chart_hist['開設日期_parsed'] = pd.to_datetime(df_chart_hist['開時日期'] if '開時日期' in df_chart_hist.columns else df_chart_hist['日期'])
+            df_chart_hist['開設日期_parsed'] = pd.to_datetime(df_chart_hist['日期'])
             df_chart_hist = df_chart_hist.sort_values(by='開設日期_parsed')
             tw_now_chart = get_taiwan_now()
             
@@ -560,7 +568,10 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['投資權重'] - df_portfolio['核心權重'] if '投資權重' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['投資權重'] - df_portfolio['核心權重'] if '投資權重' in df_portfolio.columns else df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+
+    if '偏離度 (Diff)' not in df_portfolio.columns or df_portfolio['偏離度 (Diff)'].isna().all():
+        df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
 
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
@@ -595,7 +606,7 @@ elif menu == "✍️ 每日資產動態輸入":
             
             if submit_button:
                 date_str = str(input_date)
-                df_history['開時日期'] = pd.to_datetime(df_history['開時日期'] if '開時日期' in df_history.columns else df_history['日期']).dt.strftime("%Y-%m-%d")
+                df_history['開時日期'] = pd.to_datetime(df_history['開時日期'] if '開時日期' in df_history.columns else df_history['開時日期'] if '開時日期' in df_history.columns else df_history['日期']).dt.strftime("%Y-%m-%d")
                 
                 df_history_temp = df_history.copy()
                 df_yesterday = df_history_temp[df_history_temp['開時日期'] < date_str]
