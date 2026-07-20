@@ -182,7 +182,7 @@ def calculate_absolute_portfolio_mv(df_portfolio_raw):
     return df, total_mv
 
 # ==========================================
-# 🔄 系統核心引擎：完美台灣時區 Upsert 與公式保護
+# 🔄 系統核心引擎：完美安全單向 Upsert（🎯 已移除了覆蓋 portfolio_config 的危險動作）
 # ==========================================
 def execute_system_wide_sync(custom_connection=None):
     try:
@@ -197,8 +197,9 @@ def execute_system_wide_sync(custom_connection=None):
         df_history_sync = df_history_sync.loc[:, ~df_history_sync.columns.astype(str).str.contains('^Unnamed')]
         df_portfolio_sync = df_portfolio_sync.loc[:, ~df_portfolio_sync.columns.astype(str).str.contains('^Unnamed')]
         
-        df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
+        df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
         
+        # 僅讀取清算市值，不改動任何原始欄位
         df_portfolio_sync, total_mv_calculated = calculate_absolute_portfolio_mv(df_portfolio_sync)
         total_cost_calculated = pd.to_numeric(df_portfolio_sync['投資成本'], errors='coerce').fillna(0.0).sum()
         
@@ -229,38 +230,11 @@ def execute_system_wide_sync(custom_connection=None):
             
         if '開時日期' in df_history_sync.columns:
             df_history_sync = df_history_sync.drop(columns=['開時日期'])
-
-        final_upload_df = df_portfolio_sync.copy()
-        final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
-        
-        for idx, row in final_upload_df.iterrows():
-            ticker = str(row.get('Yahoo代號', '')).strip()
-            name = str(row.get('標的名稱', '')).strip()
-            
-            if "USDTWD" in ticker.upper() or "CURRENCY" in ticker.upper() or "匯率" in name:
-                final_upload_df.at[idx, '個股現價'] = '=GOOGLEFINANCE("CURRENCY:USDTWD")'
-            elif any(k in ticker for k in ['台幣', '現金']) or any(k in name for k in ['台幣', '現金']) or ticker == '' or ticker.lower() == 'nan':
-                continue
-            else:
-                if ":" in ticker:
-                    final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}", "price")'
-                elif "QQQM" in ticker.upper():
-                    final_upload_df.at[idx, '個股現價'] = '=GOOGLEFINANCE("NASDAQ:QQQM", "price")'
-                elif ticker.upper().endswith('.TW'):
-                    stock_code = ticker.split('.')[0]
-                    final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("TPE:{stock_code}")'
-                else:
-                    final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
                     
-        final_upload_df = final_upload_df.drop(
-            columns=['單位現價', '目前投資占比', '偏離度 (Diff)', '買賣建議'], 
-            errors='ignore'
-        )
-        final_upload_df = final_upload_df.loc[:, ~final_upload_df.columns.astype(str).str.contains('^Unnamed')]
         df_history_sync = df_history_sync.loc[:, ~df_history_sync.columns.astype(str).str.contains('^Unnamed')]
         
+        # 🎯 終極修正防護：此處只將清算後的數據寫入歷史紀錄表，徹底拔除寫回 portfolio_config 的動作，全面保全 Sheets 公式！
         active_conn.update(worksheet="daily_asset_history", data=df_history_sync)
-        active_conn.update(worksheet="portfolio_config", data=final_upload_df)
         return True
     except Exception:
         return False
@@ -377,7 +351,7 @@ if menu == "📊 投資總覽儀表板":
         * **當前剩餘本金：${l2_remain:,.0f} TWD**
         """)
         
-    # 直連市值清算
+    # 直連清算
     df_portfolio, total_market_value = calculate_absolute_portfolio_mv(df_portfolio)
     total_cost = pd.to_numeric(df_portfolio['投資成本'], errors='coerce').fillna(0.0).sum()
     total_profit = total_market_value - total_cost
@@ -402,7 +376,7 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # 四大 KPI 數據卡片呈現（🎯 已完成四捨五入整數化與 TWD 標籤加註）
+    # 四大 KPI 數據卡片呈現
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("當前總市值 (TWD)", f"${round(total_market_value):,.0f}")
     col2.metric("投資總成本 (TWD)", f"${round(total_cost):,.0f}")
@@ -412,31 +386,56 @@ if menu == "📊 投資總覽儀表板":
     col4.metric("質押維持率", f"{maintenance_rate*100:.2f}%", delta="✅ 水位強韌" if maintenance_rate > 1.6 else "⚠️ 需注意風險")
 
     # ==========================================
-    # KPI 核心指標深度視覺化圖表區 (瀑布圖 & 風險指針盤)
+    # 🎯 整合：方案 B 雙柱堆疊對比視覺化圖表區
     # ==========================================
     st.markdown("### 📈 核心資產結構與風險水位視覺化")
     col_v1, col_v2 = st.columns(2)
 
     with col_v1:
-        fig_waterfall = go.Figure(go.Waterfall(
-            name="資產結構",
-            orientation="v",
-            measure=["relative", "relative", "total"],
-            x=["投資總成本", "累積投資獲利", "當前總市值"],
-            textposition="outside",
-            text=[f"${total_cost:,.0f}", f"+${total_profit:,.0f}", f"${total_market_value:,.0f}"],
-            y=[total_cost, total_profit, total_market_value],
-            connector={"line": {"color": "rgba(100, 100, 100, 0.5)", "width": 1}},
-            decreasing={"marker": {"color": "#FF6384"}}, 
-            increasing={"marker": {"color": "#2ecc71"}}, 
-            totals={"marker": {"color": "#3498db"}}     
+        fig_stacked = go.Figure()
+
+        # 第一根柱子：資產成分堆疊
+        fig_stacked.add_trace(go.Bar(
+            name='投資總成本',
+            x=['資產結構拆解', '當前總市值總計'],
+            y=[total_cost, 0],
+            text=[f"${total_cost:,.0f}", ""],
+            textposition='inside',
+            marker_color='#2ecc71',
+            hovertemplate='投資總成本: $%{y:,.0f} TWD<extra></extra>'
         ))
-        fig_waterfall.update_layout(
-            title={'text': "🎯 資產價值階梯增長圖 (TWD)", 'y': 0.9, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
-            height=320, margin=dict(t=60, b=30, l=40, r=40),
-            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+        fig_stacked.add_trace(go.Bar(
+            name='累積投資獲利',
+            x=['資產結構拆解', '當前總市值總計'],
+            y=[total_profit, 0],
+            text=[f"+${total_profit:,.0f}", ""],
+            textposition='inside',
+            marker_color='#3498db',
+            hovertemplate='累積投資獲利: $%{y:,.0f} TWD<extra></extra>'
+        ))
+
+        # 第二根柱子：獨立對比總市值
+        fig_stacked.add_trace(go.Bar(
+            name='總市值總計',
+            x=['資產結構拆解', '當前總市值總計'],
+            y=[0, total_market_value],
+            text=["", f"${total_market_value:,.0f}"],
+            textposition='outside',
+            marker_color='#9b59b6', 
+            hovertemplate='當前總市值: $%{y:,.0f} TWD<extra></extra>'
+        ))
+
+        fig_stacked.update_layout(
+            title={'text': "🧱 資產組合組合累積對比圖 (TWD)", 'y': 0.9, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
+            height=320, 
+            margin=dict(t=60, b=30, l=40, r=40),
+            barmode='stack', 
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+            yaxis=dict(showgrid=True, gridcolor='rgba(200,200,200,0.15)')
         )
-        st.plotly_chart(fig_waterfall, use_container_width=True)
+        st.plotly_chart(fig_stacked, use_container_width=True)
 
     with col_v2:
         current_rate_pct = maintenance_rate * 100 if maintenance_rate <= 100 else maintenance_rate
@@ -495,7 +494,7 @@ if menu == "📊 投資總覽儀表板":
         st.markdown("##### 📊 2. 資產規模與每日報酬率歷史趨勢合併圖")
         if not df_history.empty:
             df_chart_hist = df_history.copy()
-            df_chart_hist['開設日期_parsed'] = pd.to_datetime(df_chart_hist['日期'])
+            df_chart_hist['開設日期_parsed'] = pd.to_datetime(df_chart_hist['開時日期'] if '開時日期' in df_chart_hist.columns else df_chart_hist['日期'])
             df_chart_hist = df_chart_hist.sort_values(by='開設日期_parsed')
             tw_now_chart = get_taiwan_now()
             
@@ -516,7 +515,7 @@ if menu == "📊 投資總覽儀表板":
             fig_combined.add_trace(
                 go.Bar(
                     x=df_chart_hist['日期'], 
-                    y=df_chart_hist['開設日期_parsed'].map(lambda x: df_chart_hist.loc[df_chart_hist['開設日期_parsed'] == x, '總資產金額'].values[0]), 
+                    y=df_chart_hist['總資產金額'], 
                     name="資產總金額 (元)",
                     marker_color='rgba(100, 149, 237, 0.6)',
                     hovertemplate='日期: %{x}<br>總資產: $%{y:,.0f} TWD'
@@ -672,7 +671,7 @@ elif menu == "⚙️ 投資標的持股管理":
         st.stop()
         
     st.subheader("✏️ 線上編輯持股資訊")
-    st.info("💡 智慧公式保護網已部署：您可以自由修改標的、數量與成本。系統回寫時會全自動過濾並剔除多餘的 Unnamed 空白欄位，捍衛試算表結構！")
+    st.info("💡 智慧公式保護網已部署：手動編輯修改股數按儲存時，系統會動態依據行號自動重新編譯『個股現價』與『當前市值』的 Google 試算表原始公式，絕對不允許死數字破壞公式網！")
     
     df_portfolio_raw = df_portfolio_raw.loc[:, ~df_portfolio_raw.columns.astype(str).str.contains('^Unnamed')]
     edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_safe_editor")
@@ -682,15 +681,18 @@ elif menu == "⚙️ 投資標的持股管理":
             try:
                 final_upload_df = edited_df.copy()
                 final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
+                final_upload_df['當前市值'] = final_upload_df['當前市值'].astype(str)
                 
                 for idx, row in final_upload_df.iterrows():
+                    row_num = idx + 2  # Excel/Sheets 從第 2 列開始是資料
                     ticker = str(row.get('Yahoo代號', '')).strip()
                     name = str(row.get('標的名稱', '')).strip()
                     
+                    # 1. 智慧還原個股現價公式
                     if "USDTWD" in ticker.upper() or "CURRENCY" in ticker.upper() or "匯率" in name:
                         final_upload_df.at[idx, '個股現價'] = '=GOOGLEFINANCE("CURRENCY:USDTWD")'
                     elif any(k in ticker for k in ['台幣', '現金']) or any(k in name for k in ['台幣', '現金']) or ticker == '' or ticker.lower() == 'nan':
-                        continue
+                        pass
                     else:
                         if ":" in ticker:
                             final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}", "price")'
@@ -701,6 +703,14 @@ elif menu == "⚙️ 投資標的持股管理":
                             final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("TPE:{stock_code}")'
                         else:
                             final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
+                            
+                    # 2. 🎯 核心大升級：智慧還原當前市值動態公式 (持有數量(D欄) * 個股現價(F欄))
+                    if '台幣現金' in name or ticker == 'TWD':
+                        final_upload_df.at[idx, '當前市值'] = f'=D{row_num}'
+                    elif 'QQQM' in ticker.upper() or '美金' in name:
+                        final_upload_df.at[idx, '當前市值'] = f'=D{row_num}*F{row_num}*$F$8' # 乘上第8列固定美金匯率
+                    else:
+                        final_upload_df.at[idx, '當前市值'] = f'=D{row_num}*F{row_num}'
                 
                 final_upload_df = final_upload_df.drop(
                     columns=['單位現價', '目前投資占比', '偏離度 (Diff)', '買賣建議'], 
@@ -709,7 +719,7 @@ elif menu == "⚙️ 投資標的持股管理":
                 final_upload_df = final_upload_df.loc[:, ~final_upload_df.columns.astype(str).str.contains('^Unnamed')]
                 
                 conn.update(worksheet="portfolio_config", data=final_upload_df)
-                st.success("🎉 持股變更已寫入，且雲端公式已全自動補回再激活！")
+                st.success("🎉 持股與公式防禦任務完美成功！動態公式已成功重構補回！")
                 st.cache_data.clear()
                 st.rerun()
                 
