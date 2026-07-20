@@ -59,13 +59,13 @@ def get_taiwan_now():
     return utc_now.astimezone(taiwan_tz)
 
 # ==========================================
-# 🛡️ 流量防護盾：實體化全域快取函數
+# 🛡️ 流量防護盾大改版：快取時間歸零 (🎯 已修正為完全即時直連)
 # ==========================================
-@st.cache_data(ttl=120)  
+@st.cache_data(ttl=0)  # 👈 參數調整：ttl 設為 0，網頁一重整立即釋放舊記憶
 def cached_read_sheets(worksheet_name):
     try:
-        df = conn.read(worksheet=worksheet_name, ttl=120)
-        # 🎯 讀取時的防禦：自動拔除任何不小心產生的 Unnamed 空白欄位
+        # 🎯 強制指定 ttl=0，每次重新整理都必定穿透至 Google Sheets 抓取最新值
+        df = conn.read(worksheet=worksheet_name, ttl=0)
         if df is not None and not df.empty:
             df = df.loc[:, ~df.columns.astype(str).str.contains('^Unnamed')]
         return df
@@ -73,7 +73,7 @@ def cached_read_sheets(worksheet_name):
         return pd.DataFrame()
 
 # ==========================================
-# 🔒 登入專用認證讀取函數
+# 🔒 登入專用：直連雲端帳密讀取函數 (TTL=0)
 # ==========================================
 def fetch_credentials_live():
     for attempt in range(3):
@@ -171,15 +171,12 @@ if not st.session_state["logged_in"]:
     st.stop()
 
 # ==========================================
-# 🎯 核心大改版：直接讀取試算表「當前市值」公式欄位，並過濾清除 Unnamed
+# 🎯 核心清算機：直接讀取試算表「當前市值」公式欄位，並過濾清除 Unnamed
 # ==========================================
 def calculate_absolute_portfolio_mv(df_portfolio_raw):
-    """直接對齊並加總試算表中的『當前市值』欄位，並全面過濾清除 Unnamed 髒數據欄位"""
     df = df_portfolio_raw.copy()
-    # 🌟 核心防禦：強制拔除所有包含 Unnamed 的幽靈直欄
     df = df.loc[:, ~df.columns.astype(str).str.contains('^Unnamed')]
     
-    # 🌟 直接將 Google Sheets 計算好的『當前市值』直欄轉為標準數字並加總
     df['當前市值'] = pd.to_numeric(df['當前市值'], errors='coerce').fillna(0.0)
     total_mv = df['當前市值'].sum()
     
@@ -198,13 +195,11 @@ def execute_system_wide_sync(custom_connection=None):
         df_history_sync = df_history_sync.dropna(subset=["日期"])
         df_portfolio_sync = df_portfolio_sync.dropna(subset=["標的名稱"])
         
-        # 清除 Unnamed 防禦線
         df_history_sync = df_history_sync.loc[:, ~df_history_sync.columns.astype(str).str.contains('^Unnamed')]
         df_portfolio_sync = df_portfolio_sync.loc[:, ~df_portfolio_sync.columns.astype(str).str.contains('^Unnamed')]
         
         df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
         
-        # 導入直接抓取 Sheets 市值清算機制
         df_portfolio_sync, total_mv_calculated = calculate_absolute_portfolio_mv(df_portfolio_sync)
         total_cost_calculated = pd.to_numeric(df_portfolio_sync['投資成本'], errors='coerce').fillna(0.0).sum()
         
@@ -236,7 +231,6 @@ def execute_system_wide_sync(custom_connection=None):
         if '開時日期' in df_history_sync.columns:
             df_history_sync = df_history_sync.drop(columns=['開時日期'])
 
-        # 公式智慧還原再注入
         final_upload_df = df_portfolio_sync.copy()
         final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
         
@@ -259,12 +253,10 @@ def execute_system_wide_sync(custom_connection=None):
                 else:
                     final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
                     
-        # 🌟 確保丟棄暫存直欄時，絕對不夾帶 Unnamed 欄位回寫雲端
         final_upload_df = final_upload_df.drop(
             columns=['單位現價', '目前投資占比', '偏離度 (Diff)', '買賣建議'], 
             errors='ignore'
         )
-        # 雙重鎖定：過濾任何殘留的 Unnamed
         final_upload_df = final_upload_df.loc[:, ~final_upload_df.columns.astype(str).str.contains('^Unnamed')]
         df_history_sync = df_history_sync.loc[:, ~df_history_sync.columns.astype(str).str.contains('^Unnamed')]
         
@@ -386,7 +378,7 @@ if menu == "📊 投資總覽儀表板":
         * **當前剩餘本金：${l2_remain:,.0f} TWD**
         """)
         
-    # 🎯 直連你雲端計算好的『當前市值』進行清算
+    # 🎯 直連清算
     df_portfolio, total_market_value = calculate_absolute_portfolio_mv(df_portfolio)
     total_cost = pd.to_numeric(df_portfolio['投資成本'], errors='coerce').fillna(0.0).sum()
     total_profit = total_market_value - total_cost
@@ -525,7 +517,7 @@ if menu == "📊 投資總覽儀表板":
             fig_combined.add_trace(
                 go.Bar(
                     x=df_chart_hist['日期'], 
-                    y=df_chart_hist['總資產金額'], 
+                    y=df_chart_hist['開設日期_parsed'].map(lambda x: df_chart_hist.loc[df_chart_hist['開設日期_parsed'] == x, '總資產金額'].values[0]), 
                     name="資產總金額 (元)",
                     marker_color='rgba(100, 149, 237, 0.6)',
                     hovertemplate='日期: %{x}<br>總資產: $%{y:,.0f} TWD'
@@ -605,17 +597,17 @@ elif menu == "✍️ 每日資產動態輸入":
                 daily_diff_rounded = int(round(daily_diff))
                     
                 new_data = {
-                    "日期": date_str,
+                    "開時日期": date_str,
                     "總資產金額": input_amount_rounded,
                     "每日增額": daily_diff_rounded,
-                    "每日報酬率": float(daily_roi)
+                    "每日報酬率": float(daily_roi),
+                    "日期": date_str
                 }
                 
                 if date_str in df_history['開時日期'].values:
-                    df_history.loc[df_history['開時日期'] == date_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
-                        input_amount_rounded, daily_diff_rounded, float(daily_roi)
+                    df_history.loc[df_history['開時日期'] == date_str, ["總資產金額", "每日增額", "每日報酬率", "日期"]] = [
+                        input_amount_rounded, daily_diff_rounded, float(daily_roi), date_str
                     ]
-                    df_history.loc[df_history['開時日期'] == date_str, "日期"] = date_str
                 else:
                     df_history = pd.concat([df_history, pd.DataFrame([new_data])], ignore_index=True)
                 
@@ -683,7 +675,6 @@ elif menu == "⚙️ 投資標的持股管理":
     st.subheader("✏️ 線上編輯持股資訊")
     st.info("💡 智慧公式保護網已部署：您可以自由修改標的、數量與成本。系統回寫時會全自動過濾並剔除多餘的 Unnamed 空白欄位，捍衛試算表結構！")
     
-    # 🌟 呈現給編輯器前，先將 Unnamed 欄位拔除，保持乾淨
     df_portfolio_raw = df_portfolio_raw.loc[:, ~df_portfolio_raw.columns.astype(str).str.contains('^Unnamed')]
     edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_safe_editor")
     
@@ -712,12 +703,10 @@ elif menu == "⚙️ 投資標的持股管理":
                         else:
                             final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
                 
-                # 🌟 排除計算用暫存直欄
                 final_upload_df = final_upload_df.drop(
                     columns=['單位現價', '目前投資占比', '偏離度 (Diff)', '買賣建議'], 
                     errors='ignore'
                 )
-                # 🌟 強制再次過濾可能殘留的 Unnamed 欄位
                 final_upload_df = final_upload_df.loc[:, ~final_upload_df.columns.astype(str).str.contains('^Unnamed')]
                 
                 conn.update(worksheet="portfolio_config", data=final_upload_df)
