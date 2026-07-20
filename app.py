@@ -69,7 +69,7 @@ def cached_read_sheets(worksheet_name):
         return pd.DataFrame()
 
 # ==========================================
-# 🏦 自動化：動態貸款餘額扣除計算函式 (🎯 已修正 L1/L2 精準剩餘金額)
+# 🏦 自動化：動態貸款餘額扣除計算函式
 # ==========================================
 def calculate_remaining_loans(current_date):
     l1_base = 1000000
@@ -111,7 +111,6 @@ def calculate_remaining_loans(current_date):
         else:
             current_mo += 1
             
-    # 🎯 已修正：精準覆蓋為使用者要求的實際剩餘貸款本金數值
     l1_rem = 682586
     l2_rem = 1941174
     
@@ -156,74 +155,43 @@ if not st.session_state["logged_in"]:
     st.stop()
 
 # ==========================================
-# 2. 線上即時股價抓取
+# 🛡️ 核心大修復：全自動表格清算計算機 (100% 依據試算表原始欄位)
 # ==========================================
-def fetch_realtime_prices(tickers):
-    prices = {}
-    cash_keywords = ['現金', '台幣現金', '美金現金', 'TAIBI', 'CASH']
-    valid_tickers = list(set([str(t).strip() for t in tickers if t and str(t).strip() not in cash_keywords and str(t).strip().lower() != 'nan']))
+def calculate_absolute_portfolio_mv(df_portfolio_raw):
+    """精準解析原始表單欄位，執行 數量 x 個股現價 相乘相加"""
+    df = df_portfolio_raw.copy()
+    df['標的名稱_strip'] = df['標的名稱'].fillna('').astype(str).str.strip()
+    df['Yahoo代號_strip'] = df['Yahoo代號'].fillna('').astype(str).str.strip()
     
-    fallback_prices = {
-        "00631L.TW": 32.17,
-        "00685L.TW": 10.54,
-        "00662.TW": 118.85,
-        "QQQM": 290.68,
-        "00865B.TW": 49.25
-    }
-    
-    if not valid_tickers:
-        return prices
+    # 1. 動態鎖定美金現價這列的數值作為基礎美金匯率基準
+    usd_rate_row = df[df['標的名稱_strip'] == '美金現金']
+    if not usd_rate_row.empty:
+        usd_rate = pd.to_numeric(usd_rate_row['個股現價'].iloc[0], errors='coerce')
+        if np.isnan(usd_rate) or usd_rate <= 0:
+            usd_rate = 32.3381
+    else:
+        usd_rate = 32.3381
         
-    try:
-        import yfinance as yf
-        data = yf.download(valid_tickers, period='5d', group_by='ticker', progress=False)
-        if not data.empty:
-            has_zero = False
-            for ticker in valid_tickers:
-                try:
-                    clean_yf_ticker = ticker.split(':')[-1] if ':' in ticker else ticker
-                    df_ticker = data if len(valid_tickers) == 1 else data[clean_yf_ticker]
-                    if 'Close' in df_ticker.columns:
-                        closes = df_ticker['Close'].dropna()
-                        if not closes.empty and float(closes.iloc[-1]) > 0:
-                            prices[ticker] = round(float(closes.iloc[-1]), 2)
-                        else:
-                            prices[ticker] = fallback_prices.get(ticker, 0.0)
-                            has_zero = True
-                    else:
-                        prices[ticker] = fallback_prices.get(ticker, 0.0)
-                        has_zero = True
-                except:
-                    prices[ticker] = fallback_prices.get(ticker, 0.0)
-                    has_zero = True
-            st.session_state["is_api_blocked"] = has_zero
+    # 2. 轉換數值型態防止字串干擾
+    df['持有數量'] = pd.to_numeric(df['持有數量'], errors='coerce').fillna(0.0)
+    df['個股現價'] = pd.to_numeric(df['個股現價'], errors='coerce').fillna(0.0)
+    
+    # 3. 執行精準單列乘積清算
+    def run_row_clearance(row):
+        name = row['標的名稱_strip']
+        ticker = row['Yahoo代號_strip']
+        qty = row['持有數量']
+        price = row['個股現價']
+        
+        if '台幣現金' in name or ticker == 'TWD':
+            return qty # 台幣現金直接等於持有本金，剔除錯誤現價乘積
+        elif 'QQQM' in ticker.upper() or '美金' in name:
+            return qty * price * usd_rate # 美金標的加乘匯率
         else:
-            st.session_state["is_api_blocked"] = True
-            for ticker in valid_tickers:
-                prices[ticker] = fallback_prices.get(ticker, 0.0)
-    except Exception:
-        st.session_state["is_api_blocked"] = True
-        for ticker in valid_tickers:
-            prices[ticker] = fallback_prices.get(ticker, 0.0)
+            return qty * price # 標準台股標的直接相乘
             
-    for ticker in valid_tickers:
-        if prices.get(ticker, 0.0) <= 0:
-            prices[ticker] = fallback_prices.get(ticker, 10.0)
-            
-    return prices
-
-@st.cache_data(ttl=60)
-def get_usd_twd_rate():
-    try:
-        import yfinance as yf
-        data = yf.download("USDTWD=X", period='5d', progress=False)
-        if not data.empty and 'Close' in data.columns:
-            closes = data['Close'].dropna()
-            if not closes.empty and float(closes.iloc[-1]) > 0:
-                return round(float(closes.iloc[-1]), 4)
-        return 32.5
-    except Exception:
-        return 32.5
+    df['當前市值'] = df.apply(run_row_clearance, axis=1)
+    return df, df['當前市值'].sum()
 
 # ==========================================
 # 🔄 系統核心引擎：完美台灣時區 Upsert 與公式保護
@@ -240,39 +208,9 @@ def execute_system_wide_sync(custom_connection=None):
         
         df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
         
-        prices_map = fetch_realtime_prices(df_portfolio_sync['Yahoo代號'].tolist())
-        usd_rate = get_usd_twd_rate()
-        
-        target_price_col = '個股現價'
-        if target_price_col in df_portfolio_sync.columns:
-            df_portfolio_sync['單位現價'] = pd.to_numeric(df_portfolio_sync[target_price_col], errors='coerce').fillna(0.0)
-        else:
-            df_portfolio_sync['單位現價'] = df_portfolio_sync['Yahoo代號'].map(prices_map).fillna(0.0)
-            
-        df_portfolio_sync['Yahoo代號_clean'] = df_portfolio_sync['Yahoo代號'].fillna('').astype(str).str.strip()
-        df_portfolio_sync['標的名稱_clean'] = df_portfolio_sync['標的名稱'].fillna('').astype(str).str.strip()
-        
-        for idx, row in df_portfolio_sync.iterrows():
-            ticker = row['Yahoo代號_clean']
-            name = row['標的名稱_clean']
-            if any(k in ticker for k in ['台幣', '美金', '現金']) or any(k in name for k in ['台幣', '美金', '現金']):
-                sheet_cash_val = 0.0
-                if target_price_col in df_portfolio_sync.columns:
-                    sheet_cash_val = pd.to_numeric(row[target_price_col], errors='coerce')
-                df_portfolio_sync.loc[idx, '單位現價'] = sheet_cash_val if (not np.isnan(sheet_cash_val) and sheet_cash_val > 0) else 1.0
-
-        def calc_mv(row):
-            t = str(row['Yahoo代號_clean']).strip()
-            n = str(row['標的名稱_clean']).strip()
-            p = float(row['單位現價'])
-            q = float(row['持有數量'])
-            if '台幣' in t or '現金' in t or '台幣' in n or '現金' in n or t.endswith('.TW') or t.endswith('.tw') or t == '':
-                return p * q
-            return p * q * usd_rate
-
-        df_portfolio_sync['當前市值'] = df_portfolio_sync.apply(calc_mv, axis=1)
-        total_mv_calculated = df_portfolio_sync['當前市值'].sum()
-        total_cost_calculated = df_portfolio_sync['投資成本'].sum()
+        # 🎯 採用你指定的全新清算機制計算即時總市值
+        df_portfolio_sync, total_mv_calculated = calculate_absolute_portfolio_mv(df_portfolio_sync)
+        total_cost_calculated = pd.to_numeric(df_portfolio_sync['投資成本'], errors='coerce').fillna(0.0).sum()
         
         tw_now = get_taiwan_now()
         today_str = tw_now.strftime("%Y-%m-%d")
@@ -302,7 +240,7 @@ def execute_system_wide_sync(custom_connection=None):
         if '開時日期' in df_history_sync.columns:
             df_history_sync = df_history_sync.drop(columns=['開時日期'])
 
-        # 公式智慧還原再注入
+        # 公式智慧還原再注入防護網
         final_upload_df = df_portfolio_sync.copy()
         final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
         
@@ -326,7 +264,7 @@ def execute_system_wide_sync(custom_connection=None):
                     final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
                     
         final_upload_df = final_upload_df.drop(
-            columns=['單位現價', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議', 'Yahoo代號_clean', '標的名稱_clean'], 
+            columns=['單位現價', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議', '標的名稱_strip', 'Yahoo代號_strip'], 
             errors='ignore'
         )
         
@@ -429,13 +367,7 @@ if menu == "📊 投資總覽儀表板":
     df_history = df_history.dropna(subset=["日期"])
     df_portfolio = df_portfolio.dropna(subset=["標的名稱"])
     
-    with st.spinner('正在獲取最新即時報價與匯率...'):
-        current_prices = fetch_realtime_prices(df_portfolio['Yahoo代號'].tolist())
-        usd_twd_rate = get_usd_twd_rate()
-    
-    st.sidebar.metric("💵 當前美金匯率 (USD/TWD)", f"${usd_twd_rate:.4f}")
-    
-    # 🏦 信用貸款明細 (🎯 剩餘借貸本金已精準更正為 682,586 與 1,941,174)
+    # 🏦 信用貸款明細 
     tw_today_date = get_taiwan_now().date()
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(tw_today_date)
     total_loan_balance = l1_remain + l2_remain
@@ -456,39 +388,10 @@ if menu == "📊 投資總覽儀表板":
         * 已繳款期數：`{l2_pay_count} 期` (每月10日自動扣繳 `$18,872`)
         * **當前剩餘本金：${l2_remain:,.0f} TWD**
         """)
-    
-    target_price_column = '個股現價' 
-    if st.session_state["is_api_blocked"] and target_price_column in df_portfolio.columns:
-        df_portfolio['單位現價'] = pd.to_numeric(df_portfolio[target_price_column], errors='coerce').fillna(0.0)
-    else:
-        df_portfolio['單位現價'] = df_portfolio['Yahoo代號'].map(current_prices).fillna(0.0)
         
-    df_portfolio['Yahoo代號_clean'] = df_portfolio['Yahoo代號'].fillna('').astype(str).str.strip()
-    df_portfolio['標的名稱_clean'] = df_portfolio['標的名稱'].fillna('').astype(str).str.strip()
-    
-    for idx, row in df_portfolio.iterrows():
-        ticker = row['Yahoo代號_clean']
-        name = row['標的名稱_clean']
-        if any(k in ticker for k in ['台幣', '美金', '現金']) or any(k in name for k in ['台幣', '美金', '現金']):
-            sheet_cash_val = 0.0
-            if target_price_column in df_portfolio.columns:
-                sheet_cash_val = pd.to_numeric(row[target_price_column], errors='coerce')
-            df_portfolio.loc[idx, '單位現價'] = sheet_cash_val if (not np.isnan(sheet_cash_val) and sheet_cash_val > 0) else 1.0
-    
-    def calculate_twd_market_value(row):
-        ticker = str(row['Yahoo代號_clean']).strip()
-        name = str(row['標的名稱_clean']).strip()
-        price = float(row['單位現價'])
-        qty = float(row['持有數量'])
-        if '台幣' in ticker or '現金' in ticker or '台幣' in name or '現金' in name or ticker.endswith('.TW') or ticker.endswith('.tw') or ticker == '':
-            return price * qty
-        return price * qty * usd_twd_rate
-
-    df_portfolio['當前市值'] = df_portfolio.apply(calculate_twd_market_value, axis=1)
-    
-    # 🎯 核心市值校正防線：強制讓首頁四大卡片與後續所有圖表的總市值，皆對齊即時持股總和清算，不再被錯誤的歷史紀錄綁架！
-    total_market_value = df_portfolio['當前市值'].sum()
-    total_cost = df_portfolio['投資成本'].sum()
+    # 🎯 核心大修正：UI 渲染數據全數改用全新定義的「純持股對齊清算公式」
+    df_portfolio, total_market_value = calculate_absolute_portfolio_mv(df_portfolio)
+    total_cost = pd.to_numeric(df_portfolio['投資成本'], errors='coerce').fillna(0.0).sum()
     total_profit = total_market_value - total_cost
     total_roi = (total_profit / total_cost) if total_cost > 0 else 0.0
 
@@ -500,7 +403,7 @@ if menu == "📊 投資總覽儀表板":
         st.info("💡 雲端優化限流版：排程在無人造訪時採用快取機制保護，杜絕觸發 Google 429 錯誤限流配額。")
         
     if sync_clicked:
-        with st.spinner('正在執行台灣時間校準與全自動資產清算同步...'):
+        with st.spinner('正在執行純持股乘積加總清算同步...'):
             res = execute_system_wide_sync()
             if res:
                 st.success(f"🎉 成功同步！請重新整理網頁！")
@@ -511,7 +414,7 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # 四大 KPI 數據卡片呈現 (🎯 市值已精準校正)
+    # 四大 KPI 數據卡片呈現 (🎯 完美校正對齊)
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("當前總市值 (TWD)", f"${total_market_value:,.2f}")
     col2.metric("投資總成本", f"${total_cost:,.2f}")
@@ -521,7 +424,7 @@ if menu == "📊 投資總覽儀表板":
     col4.metric("質押維持率", f"{maintenance_rate*100:.2f}%", delta="✅ 水位強韌" if maintenance_rate > 1.6 else "⚠️ 需注意風險")
 
     # ==========================================
-    # 🎯 整合：KPI 核心指標深度視覺化圖表區 (瀑布圖 & 風險指針盤)
+    # 🎯 KPI 核心指標深度視覺化圖表區 (瀑布圖 & 風險指針盤)
     # ==========================================
     st.markdown("### 📈 核心資產結構與風險水位視覺化")
     col_v1, col_v2 = st.columns(2)
@@ -604,7 +507,7 @@ if menu == "📊 投資總覽儀表板":
         st.markdown("##### 📊 2. 資產規模與每日報酬率歷史趨勢合併圖")
         if not df_history.empty:
             df_chart_hist = df_history.copy()
-            df_chart_hist['開設日期_parsed'] = pd.to_datetime(df_chart_hist['日期'])
+            df_chart_hist['開設日期_parsed'] = pd.to_datetime(df_chart_hist['開時日期'] if '開時日期' in df_chart_hist.columns else df_chart_hist['日期'])
             df_chart_hist = df_chart_hist.sort_values(by='開設日期_parsed')
             tw_now_chart = get_taiwan_now()
             
@@ -657,19 +560,19 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['投資權重'] - df_portfolio['核心權重'] if '投資權重' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
 
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
-            return f"⚠️ 建議減碼 {row['標的名稱']}"
+            return f"⚠️ 建議減碼 {row['標的名稱_strip']}"
         elif row['偏離度 (Diff)'] < -0.05:
-            return f"🛒 建議加碼 {row['標的名稱']}"
+            return f"🛒 建議加碼 {row['標的名稱_strip']}"
         else:
             return "✅ 權重正常"
             
     df_portfolio['買賣建議'] = df_portfolio.apply(generate_advice, axis=1)
-    st.dataframe(df_portfolio[['標的名稱', '核心權重', '單位現價', '持有數量', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議']].style.format({
-        '核心權重': '{:.1%}', '單位現價': '${:,.2f}', '持有數量': '{:.0f}', '當前市值': '${:,.2f}', '目前投資占比': '{:.1%}', '偏離度 (Diff)': '{:+.1%}'
+    st.dataframe(df_portfolio[['標的名稱_strip', '核心權重', '個股現價', '持有數量', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議']].style.format({
+        '核心權重': '{:.1%}', '個股現價': '${:,.2f}', '持有數量': '{:.0f}', '當前市值': '${:,.2f}', '目前投資占比': '{:.1%}', '偏離度 (Diff)': '{:+.1%}'
     }))
 
 # ==========================================
@@ -683,7 +586,7 @@ elif menu == "✍️ 每日資產動態輸入":
     if not df_history.empty and not df_portfolio.empty:
         df_history = df_history.dropna(subset=["日期"])
         df_portfolio = df_portfolio.dropna(subset=["標的名稱"])
-        total_cost = df_portfolio['投資成本'].sum()
+        total_cost = pd.to_numeric(df_portfolio['投資成本'], errors='coerce').fillna(0.0).sum()
         
         with st.form("daily_input_form", clear_on_submit=True):
             input_date = st.date_input("選擇紀錄日期：", get_taiwan_now())
@@ -692,12 +595,10 @@ elif menu == "✍️ 每日資產動態輸入":
             
             if submit_button:
                 date_str = str(input_date)
-                df_history['日期'] = df_history['日期'].astype(str)
+                df_history['開時日期'] = pd.to_datetime(df_history['開時日期'] if '開時日期' in df_history.columns else df_history['日期']).dt.strftime("%Y-%m-%d")
                 
                 df_history_temp = df_history.copy()
-                df_history_temp['開資料日期_temp'] = pd.to_datetime(df_history_temp['日期']).dt.strftime("%Y-%m-%d")
-                
-                df_yesterday = df_history_temp[df_history_temp['開資料日期_temp'] < date_str]
+                df_yesterday = df_history_temp[df_history_temp['開時日期'] < date_str]
                 if not df_yesterday.empty:
                     last_amount = float(df_yesterday['總資產金額'].iloc[-1])
                     daily_diff = input_amount - last_amount
@@ -715,13 +616,17 @@ elif menu == "✍️ 每日資產動態輸入":
                     "每日報酬率": float(daily_roi)
                 }
                 
-                if date_str in df_history['開時日期'].values if '開時日期' in df_history.columns else date_str in df_history['日期'].values:
-                    df_history.loc[df_history['日期'] == date_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
+                if date_str in df_history['開時日期'].values:
+                    df_history.loc[df_history['開時日期'] == date_str, ["總資產金額", "每日增額", "每日報酬率"]] = [
                         input_amount_rounded, daily_diff_rounded, float(daily_roi)
                     ]
+                    df_history.loc[df_history['開時日期'] == date_str, "日期"] = date_str
                 else:
                     df_history = pd.concat([df_history, pd.DataFrame([new_data])], ignore_index=True)
                 
+                if '開時日期' in df_history.columns:
+                    df_history = df_history.drop(columns=['開時日期'])
+                    
                 with st.spinner('正在寫入...'):
                     conn.update(worksheet="daily_asset_history", data=df_history)
                 st.success("🎉 成功同步至雲端試算表！數值已自動四捨五入為整數。")
@@ -813,7 +718,7 @@ elif menu == "⚙️ 投資標的持股管理":
                             final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
                 
                 final_upload_df = final_upload_df.drop(
-                    columns=['單位現價', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議', 'Yahoo代號_clean', '標的名稱_clean'], 
+                    columns=['單位現價', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議'], 
                     errors='ignore'
                 )
                 
