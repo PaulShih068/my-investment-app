@@ -179,7 +179,7 @@ def calculate_absolute_portfolio_mv(df_portfolio_raw):
     df['當前市值'] = pd.to_numeric(df['當前市值'], errors='coerce').fillna(0.0)
     total_mv = df['當前市值'].sum()
     
-    # 🌟 實時抓取雲端試算表內已計算完成的投資總 Beta 值
+    # 實時安全擷取雲端試算表內已計算完成的投資總 Beta 值
     total_beta = 1.00
     if '投資總Beta, β值' in df.columns:
         beta_series = pd.to_numeric(df['投資總Beta, β值'], errors='coerce').dropna()
@@ -206,7 +206,7 @@ def execute_system_wide_sync(custom_connection=None):
         
         df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
         
-        # 僅讀取清算市值與 Beta，不改動任何原始欄位
+        # 僅讀取清算市值與 Beta，不改動任何持股原始欄位與公式
         df_portfolio_sync, total_mv_calculated, _ = calculate_absolute_portfolio_mv(df_portfolio_sync)
         total_cost_calculated = pd.to_numeric(df_portfolio_sync['投資成本'], errors='coerce').fillna(0.0).sum()
         
@@ -240,7 +240,7 @@ def execute_system_wide_sync(custom_connection=None):
                     
         df_history_sync = df_history_sync.loc[:, ~df_history_sync.columns.astype(str).str.contains('^Unnamed')]
         
-        # 只將數據寫入歷史紀錄表，徹底保全持股分頁的 Sheets 活體公式
+        # 只將數據單向寫入歷史紀錄表，徹底保全持股分頁的 Sheets 活體公式
         active_conn.update(worksheet="daily_asset_history", data=df_history_sync)
         return True
     except Exception:
@@ -383,7 +383,7 @@ if menu == "📊 投資總覽儀表板":
                 
     st.markdown("---")
     
-    # 🎯 五大 KPI 數據卡片呈現（已於質押維持率右側部署投資總 Beta 值卡片）
+    # 🎯 五大 KPI 數據卡片呈現（金額四捨五入整數化、加註 TWD、新增 Beta 欄位）
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("當前總市值 (TWD)", f"${round(total_market_value):,.0f}")
     col2.metric("投資總成本 (TWD)", f"${round(total_cost):,.0f}")
@@ -391,10 +391,10 @@ if menu == "📊 投資總覽儀表板":
     
     maintenance_rate = (total_market_value / total_loan_balance) if total_loan_balance > 0 else 0
     col4.metric("質押維持率", f"{maintenance_rate*100:.2f}%", delta="✅ 水位強韌" if maintenance_rate > 1.6 else "⚠️ 需注意風險")
-    col5.metric("投資總 Beta 值", f"{total_beta:.2f}") # 👈 2位小數精準展現
+    col5.metric("投資總 Beta 值", f"{total_beta:.2f}")
 
     # ==========================================
-    # 📈 核心資產結構與風險水位視覺化
+    # 🧱 視覺呈現：方案 B 雙柱堆疊對比圖
     # ==========================================
     st.markdown("### 📈 核心資產結構與風險水位視覺化")
     col_v1, col_v2 = st.columns(2)
@@ -402,6 +402,7 @@ if menu == "📊 投資總覽儀表板":
     with col_v1:
         fig_stacked = go.Figure()
 
+        # 第一根柱子：資產成分堆疊
         fig_stacked.add_trace(go.Bar(
             name='投資總成本',
             x=['資產結構拆解', '當前總市值總計'],
@@ -421,6 +422,7 @@ if menu == "📊 投資總覽儀表板":
             hovertemplate='累積投資獲利: $%{y:,.0f} TWD<extra></extra>'
         ))
 
+        # 第二根柱子：獨立對比總市值
         fig_stacked.add_trace(go.Bar(
             name='總市值總計',
             x=['資產結構拆解', '當前總市值總計'],
@@ -444,21 +446,38 @@ if menu == "📊 投資總覽儀表板":
         st.plotly_chart(fig_stacked, use_container_width=True)
 
     with col_v2:
+        # ==========================================
+        # 🎯 核心修正：破除顏色倒置錯覺的智慧動態變色風險警示盤
+        # ==========================================
+        if maintenance_rate * 100 < 160:
+            gauge_bar_color = "#e74c3c"  # 紅色（追繳危險水位）
+        elif maintenance_rate * 100 < 190:
+            gauge_bar_color = "#f1c40f"  # 黃色（緊鄰警戒線）
+        else:
+            gauge_bar_color = "#2ecc71"  # 翡翠綠（絕對安全健康色）
+
         current_rate_pct = maintenance_rate * 100 if maintenance_rate <= 100 else maintenance_rate
+
         fig_gauge = go.Figure(go.Indicator(
             mode="gauge+number",
             value=current_rate_pct,
             domain={'x': [0, 1], 'y': [0, 1]},
             gauge={
                 'axis': {'range': [0, 600], 'tickwidth': 1, 'tickcolor': "#888888", 'tickformat': '.0f'},
-                'bar': {'color': "#2c3e50", 'thickness': 0.25}, 
-                'bgcolor': "rgba(0,0,0,0)", 'borderwidth': 1, 'bordercolor': "#aaaaaa",
+                'bar': {'color': gauge_bar_color, 'thickness': 0.18}, # 亮色延伸進度條
+                'bgcolor': "rgba(0,0,0,0)", 
+                'borderwidth': 1, 
+                'bordercolor': "rgba(255,255,255,0.1)",
                 'steps': [
-                    {'range': [0, 160], 'color': 'rgba(231, 76, 60, 0.3)'},   
-                    {'range': [160, 190], 'color': 'rgba(241, 196, 15, 0.3)'}, 
-                    {'range': [190, 600], 'color': 'rgba(46, 204, 113, 0.2)'}  
+                    {'range': [0, 160], 'color': 'rgba(231, 76, 60, 0.06)'},   # 極淡暗紅
+                    {'range': [160, 190], 'color': 'rgba(241, 196, 15, 0.06)'}, # 極淡暗黃
+                    {'range': [190, 600], 'color': 'rgba(255, 255, 255, 0.03)'} # 低調深色暗底
                 ],
-                'threshold': {'line': {'color': "#e74c3c", 'width': 3}, 'thickness': 0.75, 'value': 160}
+                'threshold': {
+                    'line': {'color': "#e74c3c", 'width': 3}, 
+                    'thickness': 0.5, 
+                    'value': 160
+                }
             }
         ))
         fig_gauge.update_layout(
@@ -467,9 +486,9 @@ if menu == "📊 投資總覽儀表板":
         )
         st.plotly_chart(fig_gauge, use_container_width=True)
 
-# ==========================================
-# 📊 歷史資產與報酬率歷史趨勢圖
-# ==========================================
+    # ==========================================
+    # 📊 歷史資產與報酬率歷史趨勢圖
+    # ==========================================
     st.markdown("---")
     st.subheader("📈 智慧數據歷史趨勢儀表板")
     
@@ -553,9 +572,11 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
 
     def generate_advice(row):
+        if pd.isna(row['核心權重']) or row['核心權重'] == 0:
+            return "✅ 現金保留"
         if row['偏離度 (Diff)'] > 0.05:
             return f"⚠️ 建議減碼 {row['標的名稱']}"
         elif row['偏離度 (Diff)'] < -0.05:
@@ -565,7 +586,6 @@ if menu == "📊 投資總覽儀表板":
             
     df_portfolio['買賣建議'] = df_portfolio.apply(generate_advice, axis=1)
     
-    # 篩選呈現核心直欄，確保新增的運算直欄隱含於後台
     display_cols = [c for c in ['標的名稱', '核心權重', '個股現價', '持有數量', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議'] if c in df_portfolio.columns]
     st.dataframe(df_portfolio[display_cols].style.format({
         '核心權重': '{:.1%}', '個股現價': '${:,.2f}', '持有數量': '{:.0f}', '當前市值': '${:,.2f}', '目前投資占比': '{:.1%}', '偏離度 (Diff)': '{:+.1%}'
@@ -686,7 +706,7 @@ elif menu == "⚙️ 投資標的持股管理":
     edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_safe_editor")
     
     if st.button("💾 儲存並同步至 Google Sheets"):
-        with st.spinner('正在安全重新編譯並編織 Google 試算表四大公式鏈...'):
+        with st.spinner('正在安全重新編譯並編織 Google 試算表五大公式鏈...'):
             try:
                 final_upload_df = edited_df.copy()
                 final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
@@ -698,7 +718,7 @@ elif menu == "⚙️ 投資標的持股管理":
                         final_upload_df[col_name] = ""
                     final_upload_df[col_name] = final_upload_df[col_name].astype(str)
                 
-                # 動態定位 QQQM 的 index 以完美復刻截圖中「總和公式安置在特定行」的配置習慣
+                # 動態定位 QQQM 的 index 作為總和公式錨定點
                 qqqm_rows = final_upload_df[final_upload_df['Yahoo代號'].astype(str).str.strip().str.upper() == 'QQQM'].index
                 target_sum_row = qqqm_rows[0] + 2 if len(qqqm_rows) > 0 else 5
                 
@@ -731,7 +751,7 @@ elif menu == "⚙️ 投資標的持股管理":
                     else:
                         final_upload_df.at[idx, '當前市值'] = f'=D{row_num}*F{row_num}'
                         
-                    # 3. 🎯 終極公式盾牌：完美原樣封裝回寫新加入的 3 個運算直欄
+                    # 3. 完美原樣封裝回寫新加入的 3 個運算直欄
                     if row_num == target_sum_row:
                         final_upload_df.at[idx, '市值合計'] = f'=SUM(G$2:G${len(final_upload_df)+1})'
                         final_upload_df.at[idx, '投資總Beta, β值'] = f'=SUM(J$2:J${len(final_upload_df)+1})'
@@ -739,7 +759,7 @@ elif menu == "⚙️ 投資標的持股管理":
                         final_upload_df.at[idx, '市值合計'] = ''
                         final_upload_df.at[idx, '投資總Beta, β值'] = ''
                         
-                    # 復刻 J 欄 (Beta, β計算): =(當前市值 / 錨定總市值儲存格) * 個股手動輸入的 Beta 係數
+                    # 復刻 J 欄 (Beta, β計算)
                     final_upload_df.at[idx, 'Beta, β計算'] = f'=(G{row_num}/H${target_sum_row})*I{row_num}'
                 
                 final_upload_df = final_upload_df.drop(
