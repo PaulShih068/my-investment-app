@@ -59,28 +59,31 @@ def get_taiwan_now():
     return utc_now.astimezone(taiwan_tz)
 
 # ==========================================
-# 🛡️ 流量防護盾：實體化全域快取函數 (一般資料呈現用)
+# 🛡️ 流量防護盾：實體化全域快取函數
 # ==========================================
 @st.cache_data(ttl=120)  
 def cached_read_sheets(worksheet_name):
     try:
-        return conn.read(worksheet=worksheet_name, ttl=120)
+        df = conn.read(worksheet=worksheet_name, ttl=120)
+        # 🎯 讀取時的防禦：自動拔除任何不小心產生的 Unnamed 空白欄位
+        if df is not None and not df.empty:
+            df = df.loc[:, ~df.columns.astype(str).str.contains('^Unnamed')]
+        return df
     except Exception as e:
         return pd.DataFrame()
 
 # ==========================================
-# 🔒 登入專用：直連雲端且附帶自動重試機制的認證讀取函數
+# 🔒 登入專用認證讀取函數
 # ==========================================
 def fetch_credentials_live():
-    """跳過快取，直連 Google Sheets 讀取帳密，遇錯自動重試 3 次"""
     for attempt in range(3):
         try:
-            # 使用 ttl=0 強制直連雲端獲取最新鮮數據，防範重整暫時失效
             df = conn.read(worksheet="user_credentials", ttl=0)
             if df is not None and not df.empty:
+                df = df.loc[:, ~df.columns.astype(str).str.contains('^Unnamed')]
                 return df
         except Exception:
-            time_module.sleep(0.5) # 遇錯稍微暫停 0.5 秒後重試
+            time_module.sleep(0.5)
     return pd.DataFrame()
 
 # ==========================================
@@ -132,7 +135,7 @@ def calculate_remaining_loans(current_date):
     return l1_rem, l2_rem, l1_payments, l2_payments
 
 # ==========================================
-# 🔒 系統安全登入驗證機制 (🎯 已修正重整讀取失敗問題)
+# 🔒 系統安全登入驗證機制
 # ==========================================
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
@@ -149,9 +152,7 @@ if not st.session_state["logged_in"]:
             
             if submit_login:
                 with st.spinner("正在安全連線至驗證伺服器..."):
-                    # 🎯 改採帶有防禦機制的直連函數
                     df_creds = fetch_credentials_live()
-                    
                     if not df_creds.empty:
                         df_creds = df_creds.dropna(subset=["帳號", "密碼"])
                         match = df_creds[
@@ -170,39 +171,19 @@ if not st.session_state["logged_in"]:
     st.stop()
 
 # ==========================================
-# 🛡️ 核心清算機：純持股乘積加總計算機
+# 🎯 核心大改版：直接讀取試算表「當前市值」公式欄位，並過濾清除 Unnamed
 # ==========================================
 def calculate_absolute_portfolio_mv(df_portfolio_raw):
+    """直接對齊並加總試算表中的『當前市值』欄位，並全面過濾清除 Unnamed 髒數據欄位"""
     df = df_portfolio_raw.copy()
-    df['標的名稱_strip'] = df['標的名稱'].fillna('').astype(str).str.strip()
-    df['Yahoo代號_strip'] = df['Yahoo代號'].fillna('').astype(str).str.strip()
+    # 🌟 核心防禦：強制拔除所有包含 Unnamed 的幽靈直欄
+    df = df.loc[:, ~df.columns.astype(str).str.contains('^Unnamed')]
     
-    usd_rate_row = df[df['標的名稱_strip'] == '美金現金']
-    if not usd_rate_row.empty:
-        usd_rate = pd.to_numeric(usd_rate_row['個股現價'].iloc[0], errors='coerce')
-        if np.isnan(usd_rate) or usd_rate <= 0:
-            usd_rate = 32.3381
-    else:
-        usd_rate = 32.3381
-        
-    df['持有數量'] = pd.to_numeric(df['持有數量'], errors='coerce').fillna(0.0)
-    df['個股現價'] = pd.to_numeric(df['個股現價'], errors='coerce').fillna(0.0)
+    # 🌟 直接將 Google Sheets 計算好的『當前市值』直欄轉為標準數字並加總
+    df['當前市值'] = pd.to_numeric(df['當前市值'], errors='coerce').fillna(0.0)
+    total_mv = df['當前市值'].sum()
     
-    def run_row_clearance(row):
-        name = row['標的名稱_strip']
-        ticker = row['Yahoo代號_strip']
-        qty = row['持有數量']
-        price = row['個股現價']
-        
-        if '台幣現金' in name or ticker == 'TWD':
-            return qty 
-        elif 'QQQM' in ticker.upper() or '美金' in name:
-            return qty * price * usd_rate 
-        else:
-            return qty * price 
-            
-    df['當前市值'] = df.apply(run_row_clearance, axis=1)
-    return df, df['當前市值'].sum()
+    return df, total_mv
 
 # ==========================================
 # 🔄 系統核心引擎：完美台灣時區 Upsert 與公式保護
@@ -217,8 +198,13 @@ def execute_system_wide_sync(custom_connection=None):
         df_history_sync = df_history_sync.dropna(subset=["日期"])
         df_portfolio_sync = df_portfolio_sync.dropna(subset=["標的名稱"])
         
+        # 清除 Unnamed 防禦線
+        df_history_sync = df_history_sync.loc[:, ~df_history_sync.columns.astype(str).str.contains('^Unnamed')]
+        df_portfolio_sync = df_portfolio_sync.loc[:, ~df_portfolio_sync.columns.astype(str).str.contains('^Unnamed')]
+        
         df_history_sync['開時日期'] = pd.to_datetime(df_history_sync['開時日期'] if '開時日期' in df_history_sync.columns else df_history_sync['日期']).dt.strftime("%Y-%m-%d")
         
+        # 導入直接抓取 Sheets 市值清算機制
         df_portfolio_sync, total_mv_calculated = calculate_absolute_portfolio_mv(df_portfolio_sync)
         total_cost_calculated = pd.to_numeric(df_portfolio_sync['投資成本'], errors='coerce').fillna(0.0).sum()
         
@@ -250,6 +236,7 @@ def execute_system_wide_sync(custom_connection=None):
         if '開時日期' in df_history_sync.columns:
             df_history_sync = df_history_sync.drop(columns=['開時日期'])
 
+        # 公式智慧還原再注入
         final_upload_df = df_portfolio_sync.copy()
         final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
         
@@ -272,10 +259,14 @@ def execute_system_wide_sync(custom_connection=None):
                 else:
                     final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
                     
+        # 🌟 確保丟棄暫存直欄時，絕對不夾帶 Unnamed 欄位回寫雲端
         final_upload_df = final_upload_df.drop(
-            columns=['單位現價', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議', '標的名稱_strip', 'Yahoo代號_strip'], 
+            columns=['單位現價', '目前投資占比', '偏離度 (Diff)', '買賣建議'], 
             errors='ignore'
         )
+        # 雙重鎖定：過濾任何殘留的 Unnamed
+        final_upload_df = final_upload_df.loc[:, ~final_upload_df.columns.astype(str).str.contains('^Unnamed')]
+        df_history_sync = df_history_sync.loc[:, ~df_history_sync.columns.astype(str).str.contains('^Unnamed')]
         
         active_conn.update(worksheet="daily_asset_history", data=df_history_sync)
         active_conn.update(worksheet="portfolio_config", data=final_upload_df)
@@ -373,9 +364,6 @@ if menu == "📊 投資總覽儀表板":
         st.error("⚠️ 無法載入必要的工作表資料，請稍後再試。")
         st.stop()
         
-    df_history = df_history.dropna(subset=["日期"])
-    df_portfolio = df_portfolio.dropna(subset=["標的名稱"])
-    
     # 🏦 信用貸款明細
     tw_today_date = get_taiwan_now().date()
     l1_remain, l2_remain, l1_pay_count, l2_pay_count = calculate_remaining_loans(tw_today_date)
@@ -398,6 +386,7 @@ if menu == "📊 投資總覽儀表板":
         * **當前剩餘本金：${l2_remain:,.0f} TWD**
         """)
         
+    # 🎯 直連你雲端計算好的『當前市值』進行清算
     df_portfolio, total_market_value = calculate_absolute_portfolio_mv(df_portfolio)
     total_cost = pd.to_numeric(df_portfolio['投資成本'], errors='coerce').fillna(0.0).sum()
     total_profit = total_market_value - total_cost
@@ -411,7 +400,7 @@ if menu == "📊 投資總覽儀表板":
         st.info("💡 雲端優化限流版：排程在無人造訪時採用快取機制保護，杜絕觸發 Google 429 錯誤限流配額。")
         
     if sync_clicked:
-        with st.spinner('正在執行純持股乘積加總清算同步...'):
+        with st.spinner('正在從 Google 試算表直接對齊市值欄位清算...'):
             res = execute_system_wide_sync()
             if res:
                 st.success(f"🎉 成功同步！請重新整理網頁！")
@@ -449,7 +438,7 @@ if menu == "📊 投資總覽儀表板":
             connector={"line": {"color": "rgba(100, 100, 100, 0.5)", "width": 1}},
             decreasing={"marker": {"color": "#FF6384"}}, 
             increasing={"marker": {"color": "#2ecc71"}}, 
-            totals={"marker": {"color": "#3498db"}    } 
+            totals={"marker": {"color": "#3498db"}}     
         ))
         fig_waterfall.update_layout(
             title={'text': "🎯 資產價值階梯增長圖 (TWD)", 'y': 0.9, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
@@ -503,7 +492,7 @@ if menu == "📊 投資總覽儀表板":
         fig_pie = px.pie(
             df_pie_data, 
             values='當前市值', 
-            names='標的名稱_strip',
+            names='標的名稱',
             hole=0.4,
             color_discrete_sequence=px.colors.qualitative.Pastel
         )
@@ -568,21 +557,18 @@ if menu == "📊 投資總覽儀表板":
     st.markdown("---")
     st.subheader("🎯 核心資產再平衡與偏離度檢查")
     df_portfolio['目前投資占比'] = df_portfolio['當前市值'] / total_market_value if total_market_value > 0 else 0
-    df_portfolio['偏離度 (Diff)'] = df_portfolio['投資權重'] - df_portfolio['核心權重'] if '投資權重' in df_portfolio.columns else df_portfolio['currently_market_value'] / total_market_value - df_portfolio['核心權重'] if 'currently_market_value' in df_portfolio.columns else df_portfolio['目前投資占比'] - df_portfolio['核心權重']
-
-    if '偏離度 (Diff)' not in df_portfolio.columns or df_portfolio['偏離度 (Diff)'].isna().all():
-        df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
+    df_portfolio['偏離度 (Diff)'] = df_portfolio['目前投資占比'] - df_portfolio['核心權重']
 
     def generate_advice(row):
         if row['偏離度 (Diff)'] > 0.05:
-            return f"⚠️ 建議減碼 {row['標的名稱_strip']}"
+            return f"⚠️ 建議減碼 {row['標的名稱']}"
         elif row['偏離度 (Diff)'] < -0.05:
-            return f"🛒 建議加碼 {row['標的名稱_strip']}"
+            return f"🛒 建議加碼 {row['標的名稱']}"
         else:
             return "✅ 權重正常"
             
     df_portfolio['買賣建議'] = df_portfolio.apply(generate_advice, axis=1)
-    st.dataframe(df_portfolio[['標的名稱_strip', '核心權重', '個股現價', '持有數量', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議']].style.format({
+    st.dataframe(df_portfolio[['標的名稱', '核心權重', '個股現價', '持有數量', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議']].style.format({
         '核心權重': '{:.1%}', '個股現價': '${:,.2f}', '持有數量': '{:.0f}', '當前市值': '${:,.2f}', '目前投資占比': '{:.1%}', '偏離度 (Diff)': '{:+.1%}'
     }))
 
@@ -595,8 +581,6 @@ elif menu == "✍️ 每日資產動態輸入":
     df_portfolio = cached_read_sheets("portfolio_config")
     
     if not df_history.empty and not df_portfolio.empty:
-        df_history = df_history.dropna(subset=["日期"])
-        df_portfolio = df_portfolio.dropna(subset=["標的名稱"])
         total_cost = pd.to_numeric(df_portfolio['投資成本'], errors='coerce').fillna(0.0).sum()
         
         with st.form("daily_input_form", clear_on_submit=True):
@@ -606,7 +590,7 @@ elif menu == "✍️ 每日資產動態輸入":
             
             if submit_button:
                 date_str = str(input_date)
-                df_history['開時日期'] = pd.to_datetime(df_history['開時日期'] if '開時日期' in df_history.columns else df_history['開時日期'] if '開時日期' in df_history.columns else df_history['日期']).dt.strftime("%Y-%m-%d")
+                df_history['開時日期'] = pd.to_datetime(df_history['開時日期'] if '開時日期' in df_history.columns else df_history['日期']).dt.strftime("%Y-%m-%d")
                 
                 df_history_temp = df_history.copy()
                 df_yesterday = df_history_temp[df_history_temp['開時日期'] < date_str]
@@ -696,11 +680,11 @@ elif menu == "⚙️ 投資標的持股管理":
         st.error(f"❌ 讀取失敗: {e}")
         st.stop()
         
-    df_portfolio_raw = df_portfolio_raw.dropna(subset=["標的名稱"])
-    
     st.subheader("✏️ 線上編輯持股資訊")
-    st.info("💡 智慧公式保護網已部署：您可以自由修改標的、權重、數量與成本。當您點擊儲存時，系統將全自動利用『公式還原引擎』將個股現價重新編譯為 GOOGLEFINANCE 公式字串回寫雲端，絕對不破壞試算表的動態股價更新！")
+    st.info("💡 智慧公式保護網已部署：您可以自由修改標的、數量與成本。系統回寫時會全自動過濾並剔除多餘的 Unnamed 空白欄位，捍衛試算表結構！")
     
+    # 🌟 呈現給編輯器前，先將 Unnamed 欄位拔除，保持乾淨
+    df_portfolio_raw = df_portfolio_raw.loc[:, ~df_portfolio_raw.columns.astype(str).str.contains('^Unnamed')]
     edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_safe_editor")
     
     if st.button("💾 儲存並同步至 Google Sheets"):
@@ -728,13 +712,16 @@ elif menu == "⚙️ 投資標的持股管理":
                         else:
                             final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
                 
+                # 🌟 排除計算用暫存直欄
                 final_upload_df = final_upload_df.drop(
-                    columns=['單位現價', '當前市值', '目前投資占比', '偏離度 (Diff)', '買賣建議'], 
+                    columns=['單位現價', '目前投資占比', '偏離度 (Diff)', '買賣建議'], 
                     errors='ignore'
                 )
+                # 🌟 強制再次過濾可能殘留的 Unnamed 欄位
+                final_upload_df = final_upload_df.loc[:, ~final_upload_df.columns.astype(str).str.contains('^Unnamed')]
                 
                 conn.update(worksheet="portfolio_config", data=final_upload_df)
-                st.success("🎉 公式防禦任務大成功！持股變更已寫入，且雲端公式已全自動補回再激活！")
+                st.success("🎉 持股變更已寫入，且雲端公式已全自動補回再激活！")
                 st.cache_data.clear()
                 st.rerun()
                 
