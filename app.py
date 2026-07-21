@@ -11,38 +11,52 @@ import threading
 import time as time_module
 
 # ==========================================
-# 1. 系統設定與網頁配置（預設收合側邊欄，釋放 100% 版面空間）
+# 1. 系統設定與網頁配置（預設收合側邊欄，極大化下方視覺空間）
 # ==========================================
 st.set_page_config(
     page_title="個人智慧投資紀錄簿", 
     layout="wide", 
-    initial_sidebar_state="collapsed" # 👈 側邊欄預設收合，極大化下方圖表空間
+    initial_sidebar_state="collapsed"
 )
 
-# 頂部 Yahoo 風格頁籤客製化 CSS 樣式強化
+# 🎯 核心視覺注入：Yahoo 風格頂部橫向分頁 + 強制固定吸頂 (Sticky Top)
 st.markdown("""
 <style>
-    /* 頂部 Tabs 頁籤樣式優化 */
+    /* 📌 1. 強制頁籤導覽列固定於螢幕最頂端 (Sticky Positioning) */
     .stTabs [data-baseweb="tab-list"] {
+        position: sticky !important;
+        top: 0px !important;
+        z-index: 99999 !important;
+        background-color: #0e1117 !important; /* 實色深底，防止捲動時下方圖表文字穿透 */
+        padding-top: 8px !important;
+        padding-bottom: 8px !important;
+        margin-bottom: 15px !important;
+        border-bottom: 2px solid #2c3e50 !important;
+        box-shadow: 0px 4px 12px rgba(0, 0, 0, 0.6) !important; /* 增加沉浸式底部陰影 */
         gap: 8px;
-        border-bottom: 2px solid #333333;
-        padding-bottom: 4px;
     }
+
+    /* 📌 2. 頁籤按鈕高質感樣式優化 */
     .stTabs [data-baseweb="tab"] {
-        height: 48px;
+        height: 46px;
         white-space: pre-wrap;
-        background-color: rgba(255, 255, 255, 0.03);
+        background-color: rgba(255, 255, 255, 0.04);
         border-radius: 8px 8px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
         padding-left: 20px;
         padding-right: 20px;
         font-weight: 600;
         font-size: 1.05rem;
+        transition: all 0.2s ease-in-out;
     }
+    
+    /* 滑鼠懸停與選中態樣式 */
+    .stTabs [data-baseweb="tab"]:hover {
+        background-color: rgba(46, 204, 113, 0.1) !important;
+        color: #2ecc71 !important;
+    }
+    
     .stTabs [aria-selected="true"] {
-        background-color: rgba(46, 204, 113, 0.15) !important;
+        background-color: rgba(46, 204, 113, 0.2) !important;
         border-bottom: 3px solid #2ecc71 !important;
         color: #2ecc71 !important;
     }
@@ -301,7 +315,7 @@ def background_scheduler(static_times):
         time_module.sleep(30)
 
 # ==========================================
-# 🧭 2. 頂部導覽列控制台與系統設定列 (Top Navigation Console)
+# 🧭 2. 頂部抬頭控制台與系統設定列
 # ==========================================
 col_header_title, col_header_user = st.columns([3, 1])
 
@@ -315,7 +329,7 @@ with col_header_user:
         st.session_state["username"] = None
         st.rerun()
 
-# 頂部可折疊之「系統與自動排程設定」區塊（不佔用主版面空間）
+# 頂部可折疊之「系統與自動排程設定」區塊
 with st.expander("⏰ 雲端持久化自動排程設定 (點擊展開/收合)"):
     df_load_sched = cached_read_sheets("scheduler_config")
     if df_load_sched.empty or "觸發時間" not in df_load_sched.columns:
@@ -359,7 +373,7 @@ if "scheduler_thread_started" not in st.session_state:
     st.session_state["scheduler_thread_started"] = True
 
 # ==========================================
-# 🌟 核心重構：Yahoo 股市風格「頂部橫向分頁導覽列」
+# 🌟 頂部橫向分頁（已配置固定吸頂 Sticky CSS）
 # ==========================================
 tab_dashboard, tab_daily_input, tab_portfolio_mgmt = st.tabs([
     "📊 投資總覽儀表板", 
