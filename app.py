@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -19,7 +20,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 🎯 核心修復：精準定位第一個 Radio (頂部導覽選單) 固定吸頂 + 徹底去除小圓點 + 3D 懸浮按鈕效果
+# 🎯 核心 1：注入頂部選單專屬 CSS 樣式
 st.markdown("""
 <style>
     /* 📌 1. 鎖定 Streamlit 最頂部的原生 Header 黑色固定列 */
@@ -29,30 +30,30 @@ st.markdown("""
         height: 3.75rem !important;
     }
 
-    /* 📌 2. 精準定位：『只抓取第一個 Radio（頂部導覽選單）』固定在最頂端 Header 列 */
-    div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]):first-of-type {
+    /* 📌 2. 針對經 JS 標記的頂部選單容器 (#my-top-nav-container) 進行強制定位與美化 */
+    #my-top-nav-container {
         position: fixed !important;
         top: 0.45rem !important;
         left: 1.2rem !important;
         z-index: 999999 !important;
+        background-color: transparent !important;
         width: auto !important;
     }
 
-    /* 📌 3. 橫向排列頂部選單 */
-    div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]):first-of-type div[role="radiogroup"] {
-        flex-direction: row !important;
-        gap: 10px !important;
-        background-color: transparent !important;
-    }
-
-    /* 📌 4. 徹底隱藏頂部選單左側的單選小圓點與圖示 */
-    div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]):first-of-type div[role="radiogroup"] label > div:first-child,
-    div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]):first-of-type div[role="radiogroup"] label svg {
+    /* 徹底隱藏頂部選單的原生 Radio 單選小圓點與圖示 */
+    #my-top-nav-container div[role="radiogroup"] label > div:first-child,
+    #my-top-nav-container div[role="radiogroup"] label svg {
         display: none !important;
     }
 
-    /* 📌 5. 頂部選單按鈕基礎樣式（大面積可點擊卡片） */
-    div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]):first-of-type div[role="radiogroup"] label {
+    /* 頂部選單按鈕橫向排列 */
+    #my-top-nav-container div[role="radiogroup"] {
+        flex-direction: row !important;
+        gap: 10px !important;
+    }
+
+    /* 頂部選單膠囊按鈕質感 */
+    #my-top-nav-container div[role="radiogroup"] label {
         background-color: rgba(30, 35, 45, 0.95) !important;
         padding: 6px 18px !important;
         border-radius: 8px !important;
@@ -68,8 +69,8 @@ st.markdown("""
         justify-content: center !important;
     }
 
-    /* 滑鼠懸停微浮效果 */
-    div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]):first-of-type div[role="radiogroup"] label:hover {
+    /* 滑鼠懸停微浮 */
+    #my-top-nav-container div[role="radiogroup"] label:hover {
         transform: translateY(-2px) !important;
         background-color: rgba(46, 204, 113, 0.2) !important;
         border-color: #2ecc71 !important;
@@ -77,26 +78,26 @@ st.markdown("""
         box-shadow: 0px 4px 10px rgba(46, 204, 113, 0.3) !important;
     }
 
-    /* 📌 6. 選取狀態：3D 立體懸浮 (Floating Effect) 與翡翠綠發光 */
-    div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]):first-of-type div[role="radiogroup"] label:has(input:checked) {
+    /* 📌 3. 選取狀態：3D 懸浮浮雕效果 + 翡翠綠發光 */
+    #my-top-nav-container div[role="radiogroup"] label:has(input:checked) {
         background: linear-gradient(135deg, rgba(46, 204, 113, 0.3), rgba(39, 174, 96, 0.45)) !important;
         border: 1.5px solid #2ecc71 !important;
         color: #ffffff !important;
         font-weight: 700 !important;
         transform: translateY(-3px) !important; /* 👈 選取時向上明顯浮起 */
-        box-shadow: 0px 6px 16px rgba(46, 204, 113, 0.5), 0px 2px 4px rgba(0, 0, 0, 0.6) !important; /* 立體浮雕陰影 */
+        box-shadow: 0px 6px 16px rgba(46, 204, 113, 0.5), 0px 2px 4px rgba(0, 0, 0, 0.6) !important;
     }
 
-    /* 📌 7. 確保下方主頁面頂部推開，內容不被固定 Header 遮擋 */
+    /* 推開主內容頁面，防止與 Header 重疊 */
     .main .block-container {
         padding-top: 4.2rem !important;
     }
 
     @media (max-width: 768px) {
-        div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]):first-of-type {
+        #my-top-nav-container {
             left: 0.5rem !important;
         }
-        div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]):first-of-type div[role="radiogroup"] label {
+        #my-top-nav-container div[role="radiogroup"] label {
             padding: 4px 10px !important;
             font-size: 0.8rem !important;
         }
@@ -353,7 +354,7 @@ def background_scheduler(static_times):
         time_module.sleep(30)
 
 # ==========================================
-# 🌟 頂部最上層 Header 直嵌選單 (全站第一個 Radio，完美釘入頂部 Header)
+# 🌟 頂部最上層 Header 直嵌選單 (第一個 Radio 元件)
 # ==========================================
 selected_tab = st.radio(
     "頂部導覽選單",
@@ -362,6 +363,22 @@ selected_tab = st.radio(
     label_visibility="collapsed",
     key="top_fixed_header_nav"
 )
+
+# 🎯 核心 2：注入純 JS DOM 釘選腳本（精準捕捉第一個 Radio 並賦予 #my-top-nav-container）
+components.html("""
+<script>
+    const doc = window.parent.document;
+    function attachTopNav() {
+        const radioContainers = doc.querySelectorAll('div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"])');
+        if (radioContainers.length > 0) {
+            radioContainers[0].id = 'my-top-nav-container';
+        }
+    }
+    attachTopNav();
+    setTimeout(attachTopNav, 300);
+    setTimeout(attachTopNav, 1000);
+</script>
+""", height=0)
 
 # ==========================================
 # 🧭 2. 抬頭控制台與系統設定列
@@ -577,7 +594,7 @@ if selected_tab == "📊 投資總覽儀表板":
         st.markdown("---")
         st.subheader("📈 智慧數據歷史趨勢儀表板")
         
-        # 📌 恢復原狀：完全保留在原本位置，不受頂部選單 CSS 影響！
+        # 📌 完全獨立不受 CSS 影響，乖乖待在圖表上方！
         chart_range_option = st.radio(
             "選擇歷史趨勢圖顯示區間：",
             ["近 7 天", "近 30 天", "近 180 天", "今年以來 (YTD)", "全部顯示"],
