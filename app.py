@@ -11,7 +11,7 @@ import threading
 import time as time_module
 
 # ==========================================
-# 1. 系統設定與網頁配置（預設收合側邊欄，極大化下方視覺空間）
+# 1. 系統設定與網頁配置（預設收合側邊欄）
 # ==========================================
 st.set_page_config(
     page_title="個人智慧投資紀錄簿", 
@@ -19,24 +19,30 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 🎯 核心視覺注入：Yahoo 風格頂部橫向分頁 + 強制固定吸頂 (Sticky Top)
+# 🎯 核心修復：徹底解開並鎖定頂部頁籤吸頂 (Sticky Top) 效果
 st.markdown("""
 <style>
-    /* 📌 1. 強制頁籤導覽列固定於螢幕最頂端 (Sticky Positioning) */
-    .stTabs [data-baseweb="tab-list"] {
-        position: sticky !important;
-        top: 0px !important;
-        z-index: 99999 !important;
-        background-color: #0e1117 !important; /* 實色深底，防止捲動時下方圖表文字穿透 */
-        padding-top: 8px !important;
-        padding-bottom: 8px !important;
-        margin-bottom: 15px !important;
-        border-bottom: 2px solid #2c3e50 !important;
-        box-shadow: 0px 4px 12px rgba(0, 0, 0, 0.6) !important; /* 增加沉浸式底部陰影 */
-        gap: 8px;
+    /* 📌 1. 調整 Streamlit 系統原生 Header 的圖層順序 */
+    header[data-testid="stHeader"] {
+        z-index: 100 !important;
+        background-color: #0e1117 !important;
     }
 
-    /* 📌 2. 頁籤按鈕高質感樣式優化 */
+    /* 📌 2. 徹底鎖定頁籤選單容器固定吸頂 (Sticky) - 預留 3.75rem 避開系統工具列 */
+    div[data-testid="stTabs"] > div:first-child,
+    .stTabs [data-baseweb="tab-list"] {
+        position: sticky !important;
+        top: 3.75rem !important; /* 👈 精準避開 Streamlit 頂部工具列 */
+        z-index: 99999 !important;
+        background-color: #0e1117 !important; /* 實色深底，防止捲動時下方圖表文字穿透 */
+        padding-top: 10px !important;
+        padding-bottom: 10px !important;
+        margin-bottom: 15px !important;
+        border-bottom: 2px solid #2c3e50 !important;
+        box-shadow: 0px 6px 16px rgba(0, 0, 0, 0.8) !important; /* 沉浸式懸浮陰影 */
+    }
+
+    /* 📌 3. 頁籤按鈕高質感樣式優化 */
     .stTabs [data-baseweb="tab"] {
         height: 46px;
         white-space: pre-wrap;
@@ -46,10 +52,8 @@ st.markdown("""
         padding-right: 20px;
         font-weight: 600;
         font-size: 1.05rem;
-        transition: all 0.2s ease-in-out;
     }
     
-    /* 滑鼠懸停與選中態樣式 */
     .stTabs [data-baseweb="tab"]:hover {
         background-color: rgba(46, 204, 113, 0.1) !important;
         color: #2ecc71 !important;
@@ -373,7 +377,7 @@ if "scheduler_thread_started" not in st.session_state:
     st.session_state["scheduler_thread_started"] = True
 
 # ==========================================
-# 🌟 頂部橫向分頁（已配置固定吸頂 Sticky CSS）
+# 🌟 頂部橫向分頁（已配置 3.75rem 吸頂 Sticky 效果）
 # ==========================================
 tab_dashboard, tab_daily_input, tab_portfolio_mgmt = st.tabs([
     "📊 投資總覽儀表板", 
