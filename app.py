@@ -19,53 +19,67 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 🎯 核心修復：徹底解開並鎖定頂部頁籤吸頂 (Sticky Top) 效果
+# 🎯 核心終極修復：採用 position: fixed 絕對固定吸頂機制
 st.markdown("""
 <style>
-    /* 📌 1. 調整 Streamlit 系統原生 Header 的圖層順序 */
+    /* 📌 1. 鎖定 Streamlit 原生 Header 圖層 */
     header[data-testid="stHeader"] {
         z-index: 100 !important;
         background-color: #0e1117 !important;
     }
 
-    /* 📌 2. 徹底鎖定頁籤選單容器固定吸頂 (Sticky) - 預留 3.75rem 避開系統工具列 */
-    div[data-testid="stTabs"] > div:first-child,
-    .stTabs [data-baseweb="tab-list"] {
-        position: sticky !important;
-        top: 3.75rem !important; /* 👈 精準避開 Streamlit 頂部工具列 */
-        z-index: 99999 !important;
-        background-color: #0e1117 !important; /* 實色深底，防止捲動時下方圖表文字穿透 */
-        padding-top: 10px !important;
-        padding-bottom: 10px !important;
-        margin-bottom: 15px !important;
+    /* 📌 2. 將 Tabs 頁籤列改為 position: fixed，絕對釘在螢幕頂端 */
+    div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+        position: fixed !important;
+        top: 3.5rem !important; /* 避開 Streamlit 原生工具列 */
+        left: 0 !important;
+        right: 0 !important;
+        width: 100vw !important;
+        z-index: 999999 !important; /* 最高渲染圖層 */
+        background-color: #0e1117 !important; /* 實色深底，杜絕文字穿透 */
+        padding-top: 8px !important;
+        padding-bottom: 8px !important;
         border-bottom: 2px solid #2c3e50 !important;
-        box-shadow: 0px 6px 16px rgba(0, 0, 0, 0.8) !important; /* 沉浸式懸浮陰影 */
+        box-shadow: 0px 6px 16px rgba(0, 0, 0, 0.8) !important;
+        display: flex !important;
+        justify-content: center !important; /* 頁籤置中對齊 */
+        gap: 12px !important;
     }
 
-    /* 📌 3. 頁籤按鈕高質感樣式優化 */
+    /* 📌 3. 關鍵推開下依附內容：防止第一排數據卡片被 fixed 頁籤遮擋 */
+    div[data-testid="stTabs"] [data-baseweb="tab-panel"] {
+        margin-top: 4.5rem !important;
+    }
+
+    /* 📌 4. 頁籤按鈕質感美化 */
     .stTabs [data-baseweb="tab"] {
-        height: 46px;
+        height: 44px;
         white-space: pre-wrap;
-        background-color: rgba(255, 255, 255, 0.04);
+        background-color: rgba(255, 255, 255, 0.05) !important;
         border-radius: 8px 8px 0px 0px;
-        padding-left: 20px;
-        padding-right: 20px;
+        padding-left: 24px !important;
+        padding-right: 24px !important;
         font-weight: 600;
         font-size: 1.05rem;
+        transition: all 0.2s ease-in-out;
     }
     
     .stTabs [data-baseweb="tab"]:hover {
-        background-color: rgba(46, 204, 113, 0.1) !important;
+        background-color: rgba(46, 204, 113, 0.15) !important;
         color: #2ecc71 !important;
     }
     
     .stTabs [aria-selected="true"] {
-        background-color: rgba(46, 204, 113, 0.2) !important;
+        background-color: rgba(46, 204, 113, 0.25) !important;
         border-bottom: 3px solid #2ecc71 !important;
         color: #2ecc71 !important;
     }
     
     @media (max-width: 768px) {
+        div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+            justify-content: flex-start !important;
+            overflow-x: auto !important;
+        }
         .main h1 { font-size: 1.6rem !important; }
         .main h2 { font-size: 1.3rem !important; }
         .main h3 { font-size: 1.1rem !important; }
@@ -377,7 +391,7 @@ if "scheduler_thread_started" not in st.session_state:
     st.session_state["scheduler_thread_started"] = True
 
 # ==========================================
-# 🌟 頂部橫向分頁（已配置 3.75rem 吸頂 Sticky 效果）
+# 🌟 頂部橫向分頁（配置 position: fixed 強制吸頂效果）
 # ==========================================
 tab_dashboard, tab_daily_input, tab_portfolio_mgmt = st.tabs([
     "📊 投資總覽儀表板", 
