@@ -170,13 +170,21 @@ if not st.session_state["logged_in"]:
     st.stop()
 
 # ==========================================
-# 🎯 核心清算機：直接讀取「當前市值」與全新「投資總Beta值」欄位
+# 🎯 核心清算機：具備安全備援機制的市值與 Beta 讀取器
 # ==========================================
 def calculate_absolute_portfolio_mv(df_portfolio_raw):
     df = df_portfolio_raw.copy()
     df = df.loc[:, ~df.columns.astype(str).str.contains('^Unnamed')]
     
-    df['當前市值'] = pd.to_numeric(df['當前市值'], errors='coerce').fillna(0.0)
+    # 🛡️ 防爆安全盾：先檢驗「當前市值」欄位是否存在
+    if '當前市值' in df.columns:
+        df['當前市值'] = pd.to_numeric(df['當前市值'], errors='coerce').fillna(0.0)
+    else:
+        # 萬一 Google Sheets 欄位不幸失蹤，自動用 (持有數量 * 個股現價) 備援計算，絕不引發 KeyError
+        qty = pd.to_numeric(df.get('持有數量', 0), errors='coerce').fillna(0.0)
+        price = pd.to_numeric(df.get('個股現價', 0), errors='coerce').fillna(0.0)
+        df['當前市值'] = qty * price
+
     total_mv = df['當前市值'].sum()
     
     total_beta = 1.00
@@ -433,11 +441,9 @@ if menu == "📊 投資總覽儀表板":
         fig_stacked.update_layout(
             title={'text': "🧱 資產組合組合累積對比圖 (TWD)", 'y': 0.92, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
             height=360, 
-            # 🎯 修正1：將下邊距 b 從 30 擴大調寬至 80，釋放底部標籤空間
             margin=dict(t=60, b=80, l=40, r=40),
             barmode='stack', 
             showlegend=True,
-            # 🎯 修正1：重構圖例定位，yanchor 改為 top、y 位置微調至 -0.25，完美拉開與 X 軸文字的距離
             legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5),
             plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
             yaxis=dict(showgrid=True, gridcolor='rgba(200,200,200,0.15)')
@@ -477,10 +483,8 @@ if menu == "📊 投資總覽儀表板":
             }
         ))
         fig_gauge.update_layout(
-            # 🎯 修正2：將標題 y 位置拉高到 0.96，使其更往頂部靠攏
             title={'text': "🛡️ 質押信用維持率風險警示盤", 'y': 0.96, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
             height=360, 
-            # 🎯 修正2：將上邊距 t 從 60 大幅加高至 95，壓低儀表盤圓弧線，與標題及 300 數字拉開完美空隙
             margin=dict(t=95, b=30, l=40, r=40), 
             paper_bgcolor='rgba(0,0,0,0)'
         )
@@ -519,7 +523,7 @@ if menu == "📊 投資總覽儀表板":
         st.markdown("##### 📊 2. 資產規模與每日報酬率歷史趨勢合併圖")
         if not df_history.empty:
             df_chart_hist = df_history.copy()
-            df_chart_hist['開設日期_parsed'] = pd.to_datetime(df_chart_hist['開時日期'] if '開時日期' in df_chart_hist.columns else df_chart_hist['開時日期'] if '開時日期' in df_chart_hist.columns else df_chart_hist['日期'])
+            df_chart_hist['開設日期_parsed'] = pd.to_datetime(df_chart_hist['開時日期'] if '開時日期' in df_chart_hist.columns else df_chart_hist['日期'])
             df_chart_hist = df_chart_hist.sort_values(by='開設日期_parsed')
             tw_now_chart = get_taiwan_now()
             
@@ -528,7 +532,7 @@ if menu == "📊 投資總覽儀表板":
                 df_chart_hist = df_chart_hist[df_chart_hist['開設日期_parsed'] >= pd.to_datetime(start_dt.date())]
             elif chart_range_option == "近 30 天":
                 start_dt = tw_now_chart - timedelta(days=30)
-                df_chart_hist = df_chart_hist[df_chart_hist['開設日期_parsed'] >= pd.to_datetime(start_dt.date())]
+                df_chart_hist = df_chart_hist[df_chart_hist['開設日期_parsed'] >= pd.to_datetime(start_date.date())]
             elif chart_range_option == "近 180 天":
                 start_dt = tw_now_chart - timedelta(days=180)
                 df_chart_hist = df_chart_hist[df_chart_hist['開設日期_parsed'] >= pd.to_datetime(start_dt.date())]
@@ -700,22 +704,29 @@ elif menu == "⚙️ 投資標的持股管理":
         st.stop()
         
     st.subheader("✏️ 線上編輯持股資訊")
-    st.info("💡 智慧公式保護網已部署：當您手動更動數據按儲存時，程式碼將全自動根據行數，精準還原包括『市值合計』與『Beta 計算』在內的全部活體動態算式回寫雲端，100% 捍衛您的試算表結構！")
+    st.info("💡 智慧公式保護網已部署：當您手動更動數據按儲存時，程式碼將鎖定黃金欄位結構，並精準還原包括『當前市值』、『市值合計』與『Beta 計算』在內的全部動態算式，100% 捍衛您的試算表結構！")
     
     df_portfolio_raw = df_portfolio_raw.loc[:, ~df_portfolio_raw.columns.astype(str).str.contains('^Unnamed')]
     edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_safe_editor")
     
     if st.button("💾 儲存並同步至 Google Sheets"):
-        with st.spinner('正在安全重新編譯並編織 Google 試算表五大公式鏈...'):
+        with st.spinner('正在安全重新編譯並鎖定 Google 試算表黃金欄位結構...'):
             try:
                 final_upload_df = edited_df.copy()
-                final_upload_df['個股現價'] = final_upload_df['個股現價'].astype(str)
-                final_upload_df['當前市值'] = final_upload_df['當前市值'].astype(str)
                 
-                for col_name in ['市值合計', 'Beta, β計算', '投資總Beta, β值']:
+                # 🎯 核心強化：定義並強制鎖定 Google Sheets 11 個黃金標準欄位與順序
+                STANDARD_COLS = [
+                    '標的名稱', 'Yahoo代號', '核心權重', '持有數量', '投資成本',
+                    '個股現價', '當前市值', '市值合計', 'Beta, β', 'Beta, β計算', '投資總Beta, β值'
+                ]
+                
+                for col_name in STANDARD_COLS:
                     if col_name not in final_upload_df.columns:
                         final_upload_df[col_name] = ""
                     final_upload_df[col_name] = final_upload_df[col_name].astype(str)
+                
+                # 強制按照標準欄位排序（保證「當前市值」鎖定在 G 欄）
+                final_upload_df = final_upload_df[STANDARD_COLS]
                 
                 qqqm_rows = final_upload_df[final_upload_df['Yahoo代號'].astype(str).str.strip().str.upper() == 'QQQM'].index
                 target_sum_row = qqqm_rows[0] + 2 if len(qqqm_rows) > 0 else 5
@@ -725,6 +736,7 @@ elif menu == "⚙️ 投資標的持股管理":
                     ticker = str(row.get('Yahoo代號', '')).strip()
                     name = str(row.get('標的名稱', '')).strip()
                     
+                    # 1. 還原個股現價 Google 財經公式
                     if "USDTWD" in ticker.upper() or "CURRENCY" in ticker.upper() or "匯率" in name:
                         final_upload_df.at[idx, '個股現價'] = '=GOOGLEFINANCE("CURRENCY:USDTWD")'
                     elif any(k in ticker for k in ['台幣', '現金']) or any(k in name for k in ['台幣', '現金']) or ticker == '' or ticker.lower() == 'nan':
@@ -740,6 +752,7 @@ elif menu == "⚙️ 投資標的持股管理":
                         else:
                             final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
                             
+                    # 2. 🎯 強制補回「當前市值」動態公式 (Column G)
                     if '台幣現金' in name or ticker == 'TWD':
                         final_upload_df.at[idx, '當前市值'] = f'=D{row_num}'
                     elif 'QQQM' in ticker.upper() or '美金' in name:
@@ -747,6 +760,7 @@ elif menu == "⚙️ 投資標的持股管理":
                     else:
                         final_upload_df.at[idx, '當前市值'] = f'=D{row_num}*F{row_num}'
                         
+                    # 3. 補回市值合計與投資總 Beta 值
                     if row_num == target_sum_row:
                         final_upload_df.at[idx, '市值合計'] = f'=SUM(G$2:G${len(final_upload_df)+1})'
                         final_upload_df.at[idx, '投資總Beta, β值'] = f'=SUM(J$2:J${len(final_upload_df)+1})'
@@ -754,16 +768,13 @@ elif menu == "⚙️ 投資標的持股管理":
                         final_upload_df.at[idx, '市值合計'] = ''
                         final_upload_df.at[idx, '投資總Beta, β值'] = ''
                         
+                    # 4. 補回 J 欄 (Beta, β計算)
                     final_upload_df.at[idx, 'Beta, β計算'] = f'=(G{row_num}/H${target_sum_row})*I{row_num}'
                 
-                final_upload_df = final_upload_df.drop(
-                    columns=['單位現價', '目前投資占比', '偏離度 (Diff)', '買賣建議'], 
-                    errors='ignore'
-                )
                 final_upload_df = final_upload_df.loc[:, ~final_upload_df.columns.astype(str).str.contains('^Unnamed')]
                 
                 conn.update(worksheet="portfolio_config", data=final_upload_df)
-                st.success("🎉 持股與四大全新 Beta 公式直欄防禦任務完美大成功！")
+                st.success("🎉 防禦成功！『當前市值』欄位已成功修復並完美歸位！")
                 st.cache_data.clear()
                 st.rerun()
                 
