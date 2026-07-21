@@ -19,7 +19,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 🎯 核心終極改版：將選單直接嵌入 Streamlit 最頂部的固定 Header 列（與 Share/GitHub 圖示同層）
+# 🎯 核心修復與美化：精準定位頂部選單 + 徹底去除小圓點 + 3D 懸浮按鈕效果
 st.markdown("""
 <style>
     /* 📌 1. 鎖定 Streamlit 最頂部的原生 Header 黑色固定列 */
@@ -29,8 +29,8 @@ st.markdown("""
         height: 3.75rem !important;
     }
 
-    /* 📌 2. 將 Radio 單選選單『直接釘入』最頂部的 Header 列左側 */
-    div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]) {
+    /* 📌 2. 精準定位：『只抓取』包含「投資總覽儀表板」的 Radio，避免誤傷下方的趨勢圖選擇區間 */
+    div[data-testid="stElementContainer"]:has(input[value*="投資總覽儀表板"]) {
         position: fixed !important;
         top: 0.45rem !important;
         left: 1.2rem !important;
@@ -38,55 +38,65 @@ st.markdown("""
         width: auto !important;
     }
 
-    /* 📌 3. 美化頂部選單按鈕：去除圓點，打造膠囊頁籤視覺 (Pill Tabs) */
-    div[data-testid="stRadio"] {
-        background-color: transparent !important;
-    }
-    div[data-testid="stRadio"] > div {
-        flex-direction: row !important;
-        gap: 8px !important;
-    }
-    div[data-testid="stRadio"] label {
-        background-color: rgba(255, 255, 255, 0.08) !important;
-        padding: 5px 16px !important;
-        border-radius: 6px !important;
-        font-size: 0.9rem !important;
-        font-weight: 500 !important;
-        color: #e0e0e0 !important;
-        cursor: pointer !important;
-        border: 1px solid rgba(255, 255, 255, 0.15) !important;
-        transition: all 0.2s ease-in-out !important;
-    }
-    div[data-testid="stRadio"] label:hover {
-        background-color: rgba(46, 204, 113, 0.2) !important;
-        border-color: #2ecc71 !important;
-        color: #2ecc71 !important;
-    }
-    /* 選中狀態高亮 */
-    div[data-testid="stRadio"] label:has(input:checked) {
-        background-color: rgba(46, 204, 113, 0.25) !important;
-        border-color: #2ecc71 !important;
-        color: #2ecc71 !important;
-        font-weight: 700 !important;
-        box-shadow: 0px 2px 8px rgba(46, 204, 113, 0.3) !important;
-    }
-
-    /* 隱藏原生 Radio 圓點 */
-    div[data-testid="stRadio"] input[type="radio"] {
+    /* 📌 3. 頂部主選單專屬：徹底隱藏左側單選小圓點與圓圈圖示 */
+    div[data-testid="stElementContainer"]:has(input[value*="投資總覽儀表板"]) div[role="radiogroup"] label > div:first-child,
+    div[data-testid="stElementContainer"]:has(input[value*="投資總覽儀表板"]) div[role="radiogroup"] label svg {
         display: none !important;
     }
 
-    /* 📌 4. 推開下方主內容頂部間距，避免圖表被 Header 遮擋 */
+    /* 📌 4. 排列間距與按鈕基礎樣式 */
+    div[data-testid="stElementContainer"]:has(input[value*="投資總覽儀表板"]) div[role="radiogroup"] {
+        flex-direction: row !important;
+        gap: 10px !important;
+        background-color: transparent !important;
+    }
+
+    div[data-testid="stElementContainer"]:has(input[value*="投資總覽儀表板"]) div[role="radiogroup"] label {
+        background-color: rgba(30, 35, 45, 0.9) !important;
+        padding: 6px 18px !important;
+        border-radius: 8px !important;
+        font-size: 0.92rem !important;
+        font-weight: 600 !important;
+        color: #d0d0d0 !important;
+        cursor: pointer !important;
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
+        box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.4) !important;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+
+    /* 滑鼠懸停浮起效果 */
+    div[data-testid="stElementContainer"]:has(input[value*="投資總覽儀表板"]) div[role="radiogroup"] label:hover {
+        transform: translateY(-2px) !important;
+        background-color: rgba(46, 204, 113, 0.15) !important;
+        border-color: #2ecc71 !important;
+        color: #2ecc71 !important;
+        box-shadow: 0px 4px 10px rgba(46, 204, 113, 0.25) !important;
+    }
+
+    /* 📌 5. 選取狀態：3D 立體懸浮 (Floating Effect) 與翡翠綠光芒 */
+    div[data-testid="stElementContainer"]:has(input[value*="投資總覽儀表板"]) div[role="radiogroup"] label:has(input:checked) {
+        background: linear-gradient(135deg, rgba(46, 204, 113, 0.25), rgba(39, 174, 96, 0.35)) !important;
+        border: 1.5px solid #2ecc71 !important;
+        color: #ffffff !important;
+        font-weight: 700 !important;
+        transform: translateY(-3px) !important; /* 👈 選取時向上明顯浮起 */
+        box-shadow: 0px 6px 16px rgba(46, 204, 113, 0.45), 0px 2px 4px rgba(0, 0, 0, 0.6) !important; /* 立體浮雕陰影 */
+    }
+
+    /* 📌 6. 確保下方主頁面頂部推開，內容不被固定 Header 遮擋 */
     .main .block-container {
         padding-top: 4.2rem !important;
     }
 
     @media (max-width: 768px) {
-        div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]) {
+        div[data-testid="stElementContainer"]:has(input[value*="投資總覽儀表板"]) {
             left: 0.5rem !important;
         }
-        div[data-testid="stRadio"] label {
-            padding: 4px 8px !important;
+        div[data-testid="stElementContainer"]:has(input[value*="投資總覽儀表板"]) div[role="radiogroup"] label {
+            padding: 4px 10px !important;
             font-size: 0.8rem !important;
         }
         .main h1 { font-size: 1.6rem !important; }
@@ -342,7 +352,7 @@ def background_scheduler(static_times):
         time_module.sleep(30)
 
 # ==========================================
-# 🌟 頂部最上層 Header 直嵌選單 (此選單將被 CSS 直接拉至 Header 黑色固定條)
+# 🌟 頂部最上層 Header 直嵌選單 (精準定位於頂端，不再干擾下方選單)
 # ==========================================
 selected_tab = st.radio(
     "頂部導覽選單",
@@ -566,6 +576,7 @@ if selected_tab == "📊 投資總覽儀表板":
         st.markdown("---")
         st.subheader("📈 智慧數據歷史趨勢儀表板")
         
+        # 📌 原封不動保留在此位置，絕不重疊！
         chart_range_option = st.radio(
             "選擇歷史趨勢圖顯示區間：",
             ["近 7 天", "近 30 天", "近 180 天", "今年以來 (YTD)", "全部顯示"],
