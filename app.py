@@ -19,66 +19,75 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 🎯 核心終極修復：採用 position: fixed 絕對固定吸頂機制
+# 🎯 核心終極改版：將選單直接嵌入 Streamlit 最頂部的固定 Header 列（與 Share/GitHub 圖示同層）
 st.markdown("""
 <style>
-    /* 📌 1. 鎖定 Streamlit 原生 Header 圖層 */
+    /* 📌 1. 鎖定 Streamlit 最頂部的原生 Header 黑色固定列 */
     header[data-testid="stHeader"] {
-        z-index: 100 !important;
         background-color: #0e1117 !important;
+        z-index: 999990 !important;
+        height: 3.75rem !important;
     }
 
-    /* 📌 2. 將 Tabs 頁籤列改為 position: fixed，絕對釘在螢幕頂端 */
-    div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+    /* 📌 2. 將 Radio 單選選單『直接釘入』最頂部的 Header 列左側 */
+    div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]) {
         position: fixed !important;
-        top: 3.5rem !important; /* 避開 Streamlit 原生工具列 */
-        left: 0 !important;
-        right: 0 !important;
-        width: 100vw !important;
-        z-index: 999999 !important; /* 最高渲染圖層 */
-        background-color: #0e1117 !important; /* 實色深底，杜絕文字穿透 */
-        padding-top: 8px !important;
-        padding-bottom: 8px !important;
-        border-bottom: 2px solid #2c3e50 !important;
-        box-shadow: 0px 6px 16px rgba(0, 0, 0, 0.8) !important;
-        display: flex !important;
-        justify-content: center !important; /* 頁籤置中對齊 */
-        gap: 12px !important;
+        top: 0.45rem !important;
+        left: 1.2rem !important;
+        z-index: 999999 !important;
+        width: auto !important;
     }
 
-    /* 📌 3. 關鍵推開下依附內容：防止第一排數據卡片被 fixed 頁籤遮擋 */
-    div[data-testid="stTabs"] [data-baseweb="tab-panel"] {
-        margin-top: 4.5rem !important;
+    /* 📌 3. 美化頂部選單按鈕：去除圓點，打造膠囊頁籤視覺 (Pill Tabs) */
+    div[data-testid="stRadio"] {
+        background-color: transparent !important;
     }
-
-    /* 📌 4. 頁籤按鈕質感美化 */
-    .stTabs [data-baseweb="tab"] {
-        height: 44px;
-        white-space: pre-wrap;
-        background-color: rgba(255, 255, 255, 0.05) !important;
-        border-radius: 8px 8px 0px 0px;
-        padding-left: 24px !important;
-        padding-right: 24px !important;
-        font-weight: 600;
-        font-size: 1.05rem;
-        transition: all 0.2s ease-in-out;
+    div[data-testid="stRadio"] > div {
+        flex-direction: row !important;
+        gap: 8px !important;
     }
-    
-    .stTabs [data-baseweb="tab"]:hover {
-        background-color: rgba(46, 204, 113, 0.15) !important;
+    div[data-testid="stRadio"] label {
+        background-color: rgba(255, 255, 255, 0.08) !important;
+        padding: 5px 16px !important;
+        border-radius: 6px !important;
+        font-size: 0.9rem !important;
+        font-weight: 500 !important;
+        color: #e0e0e0 !important;
+        cursor: pointer !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        transition: all 0.2s ease-in-out !important;
+    }
+    div[data-testid="stRadio"] label:hover {
+        background-color: rgba(46, 204, 113, 0.2) !important;
+        border-color: #2ecc71 !important;
         color: #2ecc71 !important;
     }
-    
-    .stTabs [aria-selected="true"] {
+    /* 選中狀態高亮 */
+    div[data-testid="stRadio"] label:has(input:checked) {
         background-color: rgba(46, 204, 113, 0.25) !important;
-        border-bottom: 3px solid #2ecc71 !important;
+        border-color: #2ecc71 !important;
         color: #2ecc71 !important;
+        font-weight: 700 !important;
+        box-shadow: 0px 2px 8px rgba(46, 204, 113, 0.3) !important;
     }
-    
+
+    /* 隱藏原生 Radio 圓點 */
+    div[data-testid="stRadio"] input[type="radio"] {
+        display: none !important;
+    }
+
+    /* 📌 4. 推開下方主內容頂部間距，避免圖表被 Header 遮擋 */
+    .main .block-container {
+        padding-top: 4.2rem !important;
+    }
+
     @media (max-width: 768px) {
-        div[data-testid="stTabs"] [data-baseweb="tab-list"] {
-            justify-content: flex-start !important;
-            overflow-x: auto !important;
+        div[data-testid="stElementContainer"]:has(div[data-testid="stRadio"]) {
+            left: 0.5rem !important;
+        }
+        div[data-testid="stRadio"] label {
+            padding: 4px 8px !important;
+            font-size: 0.8rem !important;
         }
         .main h1 { font-size: 1.6rem !important; }
         .main h2 { font-size: 1.3rem !important; }
@@ -333,7 +342,18 @@ def background_scheduler(static_times):
         time_module.sleep(30)
 
 # ==========================================
-# 🧭 2. 頂部抬頭控制台與系統設定列
+# 🌟 頂部最上層 Header 直嵌選單 (此選單將被 CSS 直接拉至 Header 黑色固定條)
+# ==========================================
+selected_tab = st.radio(
+    "頂部導覽選單",
+    ["📊 投資總覽儀表板", "✍️ 每日資產動態輸入", "⚙️ 投資標的持股管理"],
+    horizontal=True,
+    label_visibility="collapsed",
+    key="top_fixed_header_nav"
+)
+
+# ==========================================
+# 🧭 2. 抬頭控制台與系統設定列
 # ==========================================
 col_header_title, col_header_user = st.columns([3, 1])
 
@@ -391,18 +411,9 @@ if "scheduler_thread_started" not in st.session_state:
     st.session_state["scheduler_thread_started"] = True
 
 # ==========================================
-# 🌟 頂部橫向分頁（配置 position: fixed 強制吸頂效果）
-# ==========================================
-tab_dashboard, tab_daily_input, tab_portfolio_mgmt = st.tabs([
-    "📊 投資總覽儀表板", 
-    "✍️ 每日資產動態輸入", 
-    "⚙️ 投資標的持股管理"
-])
-
-# ==========================================
 # 分頁一：📊 投資總覽儀表板
 # ==========================================
-with tab_dashboard:
+if selected_tab == "📊 投資總覽儀表板":
     df_history = cached_read_sheets("daily_asset_history")
     df_portfolio = cached_read_sheets("portfolio_config")
     
@@ -657,7 +668,7 @@ with tab_dashboard:
 # ==========================================
 # 分頁二：✍️ 每日資產動態輸入
 # ==========================================
-with tab_daily_input:
+elif selected_tab == "✍️ 每日資產動態輸入":
     st.markdown("### ✍️ 每日資產金額輕鬆記")
     df_history = cached_read_sheets("daily_asset_history")
     df_portfolio = cached_read_sheets("portfolio_config")
@@ -753,7 +764,7 @@ with tab_daily_input:
 # ==========================================
 # 分頁三：⚙️ 投資標的持股管理
 # ==========================================
-with tab_portfolio_mgmt:
+elif selected_tab == "⚙️ 投資標的持股管理":
     st.markdown("### ⚙️ 投資標的與持股數量管理")
     
     try:
