@@ -802,80 +802,42 @@ elif selected_tab == "⚙️ 投資標的持股管理":
         st.stop()
         
     st.subheader("✏️ 線上編輯持股資訊")
-    st.info("💡 智慧公式保護網：線上修改『標的名稱』、『核心權重』、『持有數量』與『投資成本』後，點擊儲存將會自動注入並保留 Google Sheets 原生的自動抓取與動態計算公式，防止公式損壞！")
+    st.info("💡 提醒：按下儲存時，系統僅會更新『標的名稱、Yahoo代號、核心權重、持有數量、投資成本、Beta, β』。其餘 5 個公式欄位（個股現價、當前市值、市值合計、Beta, β計算、投資總Beta, β值）將完全直讀 Google Sheets，絕不進行覆蓋寫入！")
     
     df_portfolio_raw = df_portfolio_raw.loc[:, ~df_portfolio_raw.columns.astype(str).str.contains('^Unnamed')]
     edited_df = st.data_editor(df_portfolio_raw, num_rows="dynamic", key="portfolio_safe_editor")
     
     if st.button("💾 儲存並同步至 Google Sheets"):
-        with st.spinner('正在同步寫入數據並還原 Google Sheets 公式結構...'):
+        with st.spinner('正在同步寫入數據（保護公式欄位不被覆蓋）...'):
             try:
-                final_upload_df = edited_df.copy()
+                # 1. 取得底層 gspread client 與目標工作表
+                client = conn._raw_connection
+                spreadsheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
+                sh = client.open_by_url(spreadsheet_url)
+                wks = sh.worksheet("portfolio_config")
                 
-                # 欄位黃金結構定義
-                STANDARD_COLS = [
-                    '標的名稱', 'Yahoo代號', '核心權重', '持有數量', '投資成本',
-                    '個股現價', '當前市值', '市值合計', 'Beta, β', 'Beta, β計算', '投資總Beta, β值'
-                ]
+                # 2. 準備 A:E 欄資料 (標的名稱, Yahoo代號, 核心權重, 持有數量, 投資成本)
+                cols_a_e = ['標的名稱', 'Yahoo代號', '核心權重', '持有數量', '投資成本']
+                for col in cols_a_e:
+                    if col not in edited_df.columns:
+                        edited_df[col] = ""
                 
-                for col_name in STANDARD_COLS:
-                    if col_name not in final_upload_df.columns:
-                        final_upload_df[col_name] = ""
-                    final_upload_df[col_name] = final_upload_df[col_name].astype(str)
+                df_a_e = edited_df[cols_a_e].fillna("")
+                data_a_e = [cols_a_e] + df_a_e.values.tolist()
                 
-                final_upload_df = final_upload_df[STANDARD_COLS]
-                total_rows = len(final_upload_df)
+                # 3. 準備 I 欄資料 (Beta, β)
+                col_i = ['Beta, β']
+                if 'Beta, β' not in edited_df.columns:
+                    edited_df['Beta, β'] = ""
                 
-                # 尋找 QQQM (美金) 所在行作為『市值合計』與『投資總Beta』的輸出放置點
-                qqqm_rows = final_upload_df[final_upload_df['Yahoo代號'].astype(str).str.strip().str.upper() == 'QQQM'].index
-                target_sum_row = qqqm_rows[0] + 2 if len(qqqm_rows) > 0 else 5
+                df_i = edited_df[col_i].fillna("")
+                data_i = [col_i] + df_i.values.tolist()
                 
-                # 精準生成公式字串（傳送至 Google Sheets 自動解析為動態公式）
-                for idx, row in final_upload_df.iterrows():
-                    row_num = idx + 2  # Google Sheets 資料列由第 2 列開始
-                    ticker = str(row.get('Yahoo代號', '')).strip()
-                    name = str(row.get('標的名稱', '')).strip()
-                    
-                    # 1. 欄位【個股現價】：自動抓取語法
-                    if "USDTWD" in ticker.upper() or "CURRENCY" in ticker.upper() or "匯率" in name:
-                        final_upload_df.at[idx, '個股現價'] = '=GOOGLEFINANCE("CURRENCY:USDTWD")'
-                    elif any(k in ticker for k in ['台幣', '現金']) or any(k in name for k in ['台幣', '現金']) or ticker == '' or ticker.lower() == 'nan':
-                        final_upload_df.at[idx, '個股現價'] = '1'
-                    else:
-                        if ":" in ticker:
-                            final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}", "price")'
-                        elif "QQQM" in ticker.upper():
-                            final_upload_df.at[idx, '個股現價'] = '=GOOGLEFINANCE("NASDAQ:QQQM", "price")'
-                        elif ticker.upper().endswith('.TW'):
-                            stock_code = ticker.split('.')[0]
-                            final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("TPE:{stock_code}")'
-                        else:
-                            final_upload_df.at[idx, '個股現價'] = f'=GOOGLEFINANCE("{ticker}")'
-                            
-                    # 2. 欄位【當前市值】：相乘公式
-                    if '台幣現金' in name or ticker == 'TWD':
-                        final_upload_df.at[idx, '當前市值'] = f'=D{row_num}'
-                    elif 'QQQM' in ticker.upper() or '美金' in name:
-                        final_upload_df.at[idx, '當前市值'] = f'=D{row_num}*F{row_num}*$F$8'
-                    else:
-                        final_upload_df.at[idx, '當前市值'] = f'=D{row_num}*F{row_num}'
-                        
-                    # 3. 欄位【市值合計】 & 5. 欄位【投資總Beta, β值】：加總公式
-                    if row_num == target_sum_row:
-                        final_upload_df.at[idx, '市值合計'] = f'=SUM(G$2:G${total_rows+1})'
-                        final_upload_df.at[idx, '投資總Beta, β值'] = f'=SUM(J$2:J${total_rows+1})'
-                    else:
-                        final_upload_df.at[idx, '市值合計'] = ''
-                        final_upload_df.at[idx, '投資總Beta, β值'] = ''
-                        
-                    # 4. 欄位【Beta, β計算】：權重算式 (引用當前市值及總市值)
-                    final_upload_df.at[idx, 'Beta, β計算'] = f'=(G{row_num}/H${target_sum_row})*I{row_num}'
+                # 4. 精準寫入指定範圍 (A1:E... 與 I1:I...)，完全忽略 F, G, H, J, K 5 個公式欄位
+                wks.update(f"A1:E{len(data_a_e)}", data_a_e)
+                wks.update(f"I1:I{len(data_i)}", data_i)
                 
-                final_upload_df = final_upload_df.loc[:, ~final_upload_df.columns.astype(str).str.contains('^Unnamed')]
-                
-                # 寫回 Google Sheets
-                conn.update(worksheet="portfolio_config", data=final_upload_df)
-                st.success("🎉 防禦成功！持股修改已儲存，且 5 大公式欄位已完整保留並啟動自動計算！")
+                st.success("🎉 同步成功！已更新資料欄位，5 大公式欄位保持原樣直讀，未受任何干擾！")
                 st.cache_data.clear()
                 st.rerun()
                 
