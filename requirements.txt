@@ -1,8 +1,6 @@
-streamlit
+flet
 pandas
 numpy
-plotly
-yfinance
-st-gsheets-connection
 gspread
 google-auth
+certifi
