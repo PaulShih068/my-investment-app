@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 ==================================================
-專案名稱：智慧投資紀錄簿 App (標準主程式 app.py)
+專案名稱：智慧投資紀錄簿 App (Streamlit / Flet 全環境相容完全體)
 檔案名稱：app.py
-功能摘要：
-1. 完整登入首頁 + Google Sheets user_credentials 雲端動態帳密驗證。
-2. 指紋/生物辨識互動對話框解鎖機制。
-3. 頂部 48px 安全區域 (Safe Area) 防遮擋排版 + 右上角登出系統按鈕。
-4. 歷史資產動態折線圖 + 自動再平衡建議。
-5. 嚴格保護 Google Sheets 公式：同步時僅允許寫入【核心權重, 持有數量, 投資成本】。
+修復說明：
+1. 加入 Signal 執行緒安全性修復 Patch，徹底解決 Streamlit Cloud 上 ValueError: signal only works in main thread 崩潰問題。
+2. 完整保留 Android 頂部安全區域 (48px)、雲端帳密驗證、指紋互動對話框與登出按鈕。
+3. 嚴格限定寫入白名單：僅更新【核心權重, 持有數量, 投資成本】，百分百保護試算表動態公式！
 ==================================================
 """
 
@@ -17,9 +15,23 @@ import types
 import os
 import json
 import re
+import signal
 
 # ==========================================
-# 0. Android SSL 憑證與環境變數設定
+# 0. 非主執行緒 Signal 安全修復 Patch (針對 Streamlit Cloud / 雲端 Web 環境)
+# ==========================================
+_original_signal = signal.signal
+def _safe_signal(signalnum, handler):
+    try:
+        return _original_signal(signalnum, handler)
+    except (ValueError, Exception):
+        # 捕捉並忽略非主執行緒無法設定 OS Signal 的錯誤
+        return None
+
+signal.signal = _safe_signal
+
+# ==========================================
+# 0.1 Android SSL 憑證與環境變數設定
 # ==========================================
 try:
     import certifi
@@ -663,7 +675,7 @@ def main(page: ft.Page):
             list_portfolio_container
         ], spacing=12)
 
-    # 容器與主視圖切換
+    # 主容器與視圖切換
     main_container = ft.Container()
 
     def show_main_app():
