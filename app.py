@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, date, time, timezone
 from streamlit_gsheets import GSheetsConnection
 import threading
 import time as time_module
+import gspread
+from google.oauth2.service_account import Credentials
 
 # ==========================================
 # 1. 系統設定與網頁配置（預設收合側邊欄）
@@ -253,7 +255,7 @@ if not st.session_state["logged_in"]:
     st.stop()
 
 # ==========================================
-# 🎯 核心清算機：具備安全備援機制的市值與 Beta 讀取器
+# 🎯 核心清算機：具備安全備援機制之市值與 Beta 讀取器
 # ==========================================
 def calculate_absolute_portfolio_mv(df_portfolio_raw):
     df = df_portfolio_raw.copy()
@@ -810,13 +812,28 @@ elif selected_tab == "⚙️ 投資標的持股管理":
     if st.button("💾 儲存並同步至 Google Sheets"):
         with st.spinner('正在同步寫入數據（保護公式欄位不被覆蓋）...'):
             try:
-                # 1. 取得底層 gspread client 與目標工作表
-                client = conn._raw_connection
+                # 1. 抽取 Service Account 憑證資訊（過濾掉非憑證欄位）
+                service_account_info = {
+                    k: v for k, v in st.secrets["connections"]["gsheets"].items()
+                    if k != "spreadsheet"
+                }
+                
+                # 2. 設定 GCP 存取範圍權限
+                scopes = [
+                    "https://www.googleapis.com/auth/spreadsheets",
+                    "https://www.googleapis.com/auth/drive"
+                ]
+                
+                # 3. 建立原生 gspread 連線物件
+                creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
+                client = gspread.authorize(creds)
+                
+                # 4. 開啟雲端試算表與目標工作表
                 spreadsheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
                 sh = client.open_by_url(spreadsheet_url)
                 wks = sh.worksheet("portfolio_config")
                 
-                # 2. 準備 A:E 欄資料 (標的名稱, Yahoo代號, 核心權重, 持有數量, 投資成本)
+                # 5. 準備 A:E 欄資料 (標的名稱, Yahoo代號, 核心權重, 持有數量, 投資成本)
                 cols_a_e = ['標的名稱', 'Yahoo代號', '核心權重', '持有數量', '投資成本']
                 for col in cols_a_e:
                     if col not in edited_df.columns:
@@ -825,7 +842,7 @@ elif selected_tab == "⚙️ 投資標的持股管理":
                 df_a_e = edited_df[cols_a_e].fillna("")
                 data_a_e = [cols_a_e] + df_a_e.values.tolist()
                 
-                # 3. 準備 I 欄資料 (Beta, β)
+                # 6. 準備 I 欄資料 (Beta, β)
                 col_i = ['Beta, β']
                 if 'Beta, β' not in edited_df.columns:
                     edited_df['Beta, β'] = ""
@@ -833,9 +850,9 @@ elif selected_tab == "⚙️ 投資標的持股管理":
                 df_i = edited_df[col_i].fillna("")
                 data_i = [col_i] + df_i.values.tolist()
                 
-                # 4. 精準寫入指定範圍 (A1:E... 與 I1:I...)，完全忽略 F, G, H, J, K 5 個公式欄位
-                wks.update(f"A1:E{len(data_a_e)}", data_a_e)
-                wks.update(f"I1:I{len(data_i)}", data_i)
+                # 7. 精準更新 A1:E 欄與 I1:I 欄，完全跳過 F, G, H, J, K 5 個公式欄位
+                wks.update(range_name=f"A1:E{len(data_a_e)}", values=data_a_e)
+                wks.update(range_name=f"I1:I{len(data_i)}", values=data_i)
                 
                 st.success("🎉 同步成功！已更新資料欄位，5 大公式欄位保持原樣直讀，未受任何干擾！")
                 st.cache_data.clear()
