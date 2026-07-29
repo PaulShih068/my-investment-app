@@ -2,9 +2,8 @@ name: Streamlit 自動喚醒保活機制
 
 on:
   schedule:
-    # 使用 Cron 語法：每 6 小時自動執行一次 (分鐘 時 日 月 星期)
+    # 每 6 小時自動觸發一次
     - cron: '0 */6 * * *'
-  # 允許在 GitHub 頁面上隨時手動點擊測試
   workflow_dispatch:
 
 jobs:
