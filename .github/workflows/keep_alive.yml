@@ -1,0 +1,22 @@
+name: Streamlit 自動喚醒保活機制
+
+on:
+  schedule:
+    # 使用 Cron 語法：每 6 小時自動執行一次 (分鐘 時 日 月 星期)
+    - cron: '0 */6 * * *'
+  # 允許在 GitHub 頁面上隨時手動點擊測試
+  workflow_dispatch:
+
+jobs:
+  keep-app-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 發送 HTTP 請求喚醒 Streamlit 網頁
+        run: |
+          # 🎯 請將下方網址替換為你實際的 Streamlit 網頁 URL
+          APP_URL="https://your-app-name.streamlit.app"
+          
+          echo "正在發送連線請求至: $APP_URL"
+          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -L "$APP_URL")
+          echo "回應狀態碼: $RESPONSE_CODE"
+          echo "於 $(date) 成功發送保活訊號！"
