@@ -14,7 +14,7 @@ jobs:
       - name: 發送 HTTP 請求喚醒 Streamlit 網頁
         run: |
           # 🎯 請將下方網址替換為你實際的 Streamlit 網頁 URL
-          APP_URL="https://your-app-name.streamlit.app"
+          APP_URL="https://paulshih068-investment.streamlit.app/"
           
           echo "正在發送連線請求至: $APP_URL"
           RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -L "$APP_URL")
