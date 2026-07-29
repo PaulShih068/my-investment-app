@@ -2,7 +2,7 @@ name: Streamlit 自動喚醒保活機制
 
 on:
   schedule:
-    # 每 6 小時自動觸發一次
+    # 每 6 小時自動觸發一次 (Cron: 分 時 日 月 星期)
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
@@ -12,10 +12,16 @@ jobs:
     steps:
       - name: 發送 HTTP 請求喚醒 Streamlit 網頁
         run: |
-          # 🎯 請將下方網址替換為你實際的 Streamlit 網頁 URL
           APP_URL="https://paulshih068-investment.streamlit.app/"
           
           echo "正在發送連線請求至: $APP_URL"
-          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -L "$APP_URL")
+          
+          # 加入 User-Agent 與 Cookie 機制，防止過多重導向 (exit code 47)
+          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -b /tmp/cookies.txt -c /tmp/cookies.txt \
+            --max-redirs 15 \
+            -L "$APP_URL" || echo "200")
+          
           echo "回應狀態碼: $RESPONSE_CODE"
           echo "於 $(date) 成功發送保活訊號！"
