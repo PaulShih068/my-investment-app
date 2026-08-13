@@ -1,27 +1,59 @@
-name: Streamlit 自動喚醒保活機制
+name: Streamlit 真人瀏覽器自動喚醒保活機制
 
 on:
   schedule:
     # 每 6 小時自動觸發一次 (Cron: 分 時 日 月 星期)
     - cron: '0 */6 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # 允許在 GitHub 頁面上手動觸發測試
 
 jobs:
   keep-app-alive:
     runs-on: ubuntu-latest
     steps:
-      - name: 發送 HTTP 請求喚醒 Streamlit 網頁
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安裝 Playwright 瀏覽器自動化套件
         run: |
-          APP_URL="https://paulshih068-investment.streamlit.app/"
-          
-          echo "正在發送連線請求至: $APP_URL"
-          
-          # 加入 User-Agent 與 Cookie 機制，防止過多重導向 (exit code 47)
-          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-            -b /tmp/cookies.txt -c /tmp/cookies.txt \
-            --max-redirs 15 \
-            -L "$APP_URL" || echo "200")
-          
-          echo "回應狀態碼: $RESPONSE_CODE"
-          echo "於 $(date) 成功發送保活訊號！"
+          python -m pip install --upgrade pip
+          pip install playwright
+          playwright install chromium
+
+      - name: 啟動無頭瀏覽器模擬真實連線與自動喚醒
+        run: |
+          python -c '
+          import time
+          from playwright.sync_api import sync_playwright
+
+          url = "https://paulshih068-investment.streamlit.app/"
+          print(f"🚀 開始啟動 Headless 瀏覽器造訪: {url}")
+
+          with sync_playwright() as p:
+              # 啟動 Chromium 瀏覽器
+              browser = p.chromium.launch(headless=True)
+              page = browser.new_page()
+              
+              try:
+                  page.goto(url, timeout=60000)
+                  time.sleep(5) # 等待 DOM 元素與 JS 完全載入
+                  
+                  # 檢查頁面上是否存在「休眠喚醒按鈕」
+                  wake_button = page.locator("button:has-text(\"Yes, get this app back up!\")")
+                  
+                  if wake_button.count() > 0 and wake_button.is_visible():
+                      print("⚠️ 偵測到網頁處於休眠狀態！正在自動點擊「Wake Up」按鈕...")
+                      wake_button.click()
+                      print("⏳ 已成功點擊喚醒按鈕，等待 15 秒讓 Streamlit 容器重新開機...")
+                      time.sleep(15)
+                  else:
+                      print("✅ 網頁目前處於活躍狀態，已成功建立 WebSocket 互動連線！")
+                      
+              except Exception as e:
+                  print(f"❌ 執行過程中發生異常: {e}")
+              finally:
+                  browser.close()
+                  
+          print("🎉 保活與自動喚醒任務執行完成！")
+          '
