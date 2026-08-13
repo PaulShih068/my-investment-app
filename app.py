@@ -171,29 +171,29 @@ def fetch_credentials_live():
     return pd.DataFrame()
 
 # ==========================================
-# 🏦 自動化：固定月繳金額貸款餘額扣除計算函式
+# 🏦 自動化：精準基準與動態月繳扣款計算法
 # ==========================================
 def calculate_remaining_loans(current_date):
-    # L1 參數設定
-    l1_base = 1000000
-    l1_day = 20
-    l1_pay = 12797  # 固定月繳金額
+    # L1 參數設定 (2026/08/01 扣款前基準剩餘本金：$682,586)
     l1_base_date = date(2024, 4, 20)
+    l1_base_rem = 682586
+    l1_ref_date = date(2026, 8, 1)
+    l1_pay = 12797
     
-    # L2 參數設定
-    l2_base = 2000000
-    l2_day = 10
-    l2_pay = 18872  # 固定月繳金額
+    # L2 參數設定 (2026/08/10 扣款後基準剩餘本金：$1,926,457)
     l2_base_date = date(2026, 4, 10)
+    l2_base_rem = 1926457
+    l2_ref_date = date(2026, 8, 11)
+    l2_pay = 18872
     
-    # 計算 L1 已繳款期數
+    # 計算 L1 總已繳款期數
     l1_payments = 0
     start_yr_1, start_mo_1 = l1_base_date.year, l1_base_date.month
     end_yr, end_mo = current_date.year, current_date.month
     
     current_yr, current_mo = start_yr_1, start_mo_1
     while (current_yr < end_yr) or (current_yr == end_yr and current_mo <= end_mo):
-        pay_date_l1 = date(current_yr, current_mo, l1_day)
+        pay_date_l1 = date(current_yr, current_mo, 20)
         if l1_base_date <= pay_date_l1 <= current_date:
             l1_payments += 1
         if current_mo == 12:
@@ -202,13 +202,13 @@ def calculate_remaining_loans(current_date):
         else:
             current_mo += 1
             
-    # 計算 L2 已繳款期數
+    # 計算 L2 總已繳款期數
     l2_payments = 0
     start_yr_2, start_mo_2 = l2_base_date.year, l2_base_date.month
     
     current_yr, current_mo = start_yr_2, start_mo_2
     while (current_yr < end_yr) or (current_yr == end_yr and current_mo <= end_mo):
-        pay_date_l2 = date(current_yr, current_mo, l2_day)
+        pay_date_l2 = date(current_yr, current_mo, 10)
         if l2_base_date <= pay_date_l2 <= current_date:
             l2_payments += 1
         if current_mo == 12:
@@ -217,9 +217,36 @@ def calculate_remaining_loans(current_date):
         else:
             current_mo += 1
             
-    # 以固定月繳金額進行每期扣款
-    l1_rem = max(0, l1_base - (l1_payments * l1_pay))
-    l2_rem = max(0, l2_base - (l2_payments * l2_pay))
+    # 計算自 2026/08 基準點後新增的扣繳期數
+    l1_extra_payments = 0
+    if current_date >= l1_ref_date:
+        cur_y, cur_m = l1_ref_date.year, l1_ref_date.month
+        while (cur_y < end_yr) or (cur_y == end_yr and cur_m <= end_mo):
+            p_date = date(cur_y, cur_m, 20)
+            if l1_ref_date <= p_date <= current_date:
+                l1_extra_payments += 1
+            if cur_m == 12:
+                cur_m = 1
+                cur_y += 1
+            else:
+                cur_m += 1
+
+    l2_extra_payments = 0
+    if current_date >= l2_ref_date:
+        cur_y, cur_m = l2_ref_date.year, l2_ref_date.month
+        while (cur_y < end_yr) or (cur_y == end_yr and cur_m <= end_mo):
+            p_date = date(cur_y, cur_m, 10)
+            if l2_ref_date <= p_date <= current_date:
+                l2_extra_payments += 1
+            if cur_m == 12:
+                cur_m = 1
+                cur_y += 1
+            else:
+                cur_m += 1
+
+    # 剩餘本金動態試算
+    l1_rem = max(0, l1_base_rem - (l1_extra_payments * l1_pay))
+    l2_rem = max(0, l2_base_rem - (l2_extra_payments * l2_pay))
     
     return l1_rem, l2_rem, l1_payments, l2_payments
 
@@ -640,7 +667,7 @@ if selected_tab == "📊 投資總覽儀表板":
                     df_chart_hist = df_chart_hist[df_chart_hist['開設日期_parsed'] >= pd.to_datetime(start_dt.date())]
                 elif chart_range_option == "近 180 天":
                     start_dt = tw_now_chart - timedelta(days=180)
-                    df_chart_hist = df_chart_hist[df_chart_hist['開設日期_parsed'] >= pd.to_datetime(start_date.date())]
+                    df_chart_hist = df_chart_hist[df_chart_hist['開設日期_parsed'] >= pd.to_datetime(start_dt.date())]
                 elif chart_range_option == "今年以來 (YTD)":
                     start_dt = datetime(tw_now_chart.year, 1, 1)
                     df_chart_hist = df_chart_hist[df_chart_hist['開設日期_parsed'] >= pd.to_datetime(start_dt)]
