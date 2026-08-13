@@ -33,12 +33,17 @@ jobs:
                   page.goto(url, timeout=60000)
                   time.sleep(5) # 等待 DOM 元素與 JS 完全載入
                   
-                  wake_button = page.locator("button:has-text(\"Yes, get this app back up!\")")
+                  # 🎯 雙重驗證機制：
+                  # 1. 檢查頁面上是否有「Zzzz」或休眠提示文字
+                  has_sleep_text = page.locator("text=Zzzz").count() > 0 or page.locator("text=This app has gone to sleep").count() > 0
                   
-                  if wake_button.count() > 0 and wake_button.is_visible():
-                      print("⚠️ 偵測到網頁處於休眠狀態！正在自動點擊「Wake Up」按鈕...")
-                      wake_button.click()
-                      print("⏳ 已成功點擊喚醒按鈕，等待 15 秒讓 Streamlit 容器重新開機...")
+                  # 2. 定位「Yes, get this app back up!」喚醒按鈕
+                  wake_button = page.get_by_role("button", name="Yes, get this app back up!")
+                  
+                  if has_sleep_text or (wake_button.count() > 0 and wake_button.is_visible()):
+                      print("⚠️ 偵測到網頁處於 Zzzz 休眠畫面！正在自動點擊「Yes, get this app back up!」按鈕...")
+                      wake_button.click(timeout=10000)
+                      print("⏳ 已成功點擊喚醒按鈕，等待 15 秒讓 Streamlit 容器重新啟動...")
                       time.sleep(15)
                   else:
                       print("✅ 網頁目前處於活躍狀態，已成功建立 WebSocket 互動連線！")
