@@ -2,7 +2,7 @@ name: Streamlit 真人瀏覽器自動喚醒保活機制
 
 on:
   schedule:
-    # 每 6 小時自動觸發一次 (Cron: 分 時 日 月 星期)
+    # 每 6 小時自動觸發一次 (Cron 語法: 分 時 日 月 星期)
     - cron: '0 */6 * * *'
   workflow_dispatch: # 允許在 GitHub 頁面上手動觸發測試
 
@@ -31,7 +31,6 @@ jobs:
           print(f"🚀 開始啟動 Headless 瀏覽器造訪: {url}")
 
           with sync_playwright() as p:
-              # 啟動 Chromium 瀏覽器
               browser = p.chromium.launch(headless=True)
               page = browser.new_page()
               
@@ -39,7 +38,6 @@ jobs:
                   page.goto(url, timeout=60000)
                   time.sleep(5) # 等待 DOM 元素與 JS 完全載入
                   
-                  # 檢查頁面上是否存在「休眠喚醒按鈕」
                   wake_button = page.locator("button:has-text(\"Yes, get this app back up!\")")
                   
                   if wake_button.count() > 0 and wake_button.is_visible():
