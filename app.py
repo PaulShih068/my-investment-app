@@ -171,19 +171,22 @@ def fetch_credentials_live():
     return pd.DataFrame()
 
 # ==========================================
-# 🏦 自動化：動態貸款餘額扣除計算函式
+# 🏦 自動化：固定月繳金額貸款餘額扣除計算函式
 # ==========================================
 def calculate_remaining_loans(current_date):
+    # L1 參數設定
     l1_base = 1000000
     l1_day = 20
-    l1_pay = 12797
+    l1_pay = 12797  # 固定月繳金額
     l1_base_date = date(2024, 4, 20)
     
+    # L2 參數設定
     l2_base = 2000000
     l2_day = 10
-    l2_pay = 18872
+    l2_pay = 18872  # 固定月繳金額
     l2_base_date = date(2026, 4, 10)
     
+    # 計算 L1 已繳款期數
     l1_payments = 0
     start_yr_1, start_mo_1 = l1_base_date.year, l1_base_date.month
     end_yr, end_mo = current_date.year, current_date.month
@@ -199,6 +202,7 @@ def calculate_remaining_loans(current_date):
         else:
             current_mo += 1
             
+    # 計算 L2 已繳款期數
     l2_payments = 0
     start_yr_2, start_mo_2 = l2_base_date.year, l2_base_date.month
     
@@ -213,8 +217,9 @@ def calculate_remaining_loans(current_date):
         else:
             current_mo += 1
             
-    l1_rem = 682586
-    l2_rem = 1941174
+    # 以固定月繳金額進行每期扣款
+    l1_rem = max(0, l1_base - (l1_payments * l1_pay))
+    l2_rem = max(0, l2_base - (l2_payments * l2_pay))
     
     return l1_rem, l2_rem, l1_payments, l2_payments
 
@@ -635,7 +640,7 @@ if selected_tab == "📊 投資總覽儀表板":
                     df_chart_hist = df_chart_hist[df_chart_hist['開設日期_parsed'] >= pd.to_datetime(start_dt.date())]
                 elif chart_range_option == "近 180 天":
                     start_dt = tw_now_chart - timedelta(days=180)
-                    df_chart_hist = df_chart_hist[df_chart_hist['開設日期_parsed'] >= pd.to_datetime(start_dt.date())]
+                    df_chart_hist = df_chart_hist[df_chart_hist['開設日期_parsed'] >= pd.to_datetime(start_date.date())]
                 elif chart_range_option == "今年以來 (YTD)":
                     start_dt = datetime(tw_now_chart.year, 1, 1)
                     df_chart_hist = df_chart_hist[df_chart_hist['開設日期_parsed'] >= pd.to_datetime(start_dt)]
